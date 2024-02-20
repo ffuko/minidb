@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <format>
+#include <ostream>
 #include <string>
 #include <sys/types.h>
 #include <vector>
@@ -11,61 +13,90 @@ namespace storage {
 
 class IndexNode;
 
-enum class FieldType {
-    // a field of Infimum is smaller than any other field in a index node.
-    Infimum,
-    // a field of Supremum is larger than any other field in a index node.
-    Supremum,
-    Number /* TODO:integer for now; allow floating point */,
-    Boolean,
-    String,
-    // NOTE: is Undefined type necessary?
-};
-
-// FieldMeta contains the metadata of the column, shared by all column
-// instances.
+// FieldMeta contains the metadata of a kind of field, shared by all field
+// instances of the same kind.
 struct FieldMeta {
-    FieldType type;
+    enum class Type {
+        // a field of Infimum is smaller than any other field in a index node.
+        Infimum,
+        // a field of Supremum is larger than any other field in a index node.
+        Supremum,
+        Number /* TODO:integer for now; allow floating point */,
+        Boolean,
+        String,
+        // NOTE: is Undefined type necessary?
+    };
+
+    Type type;
     std::string name;
     // the position of the column in the table;
     // table id of which it belongs to;
 
     bool is_primary;
+
+    FieldMeta(Type type, const std::string &name, bool is_primary)
+        : type(type), name(name), is_primary(is_primary) {}
+
+    static FieldMeta register_string_field(const std::string &name,
+                                           bool is_primary) {
+        return FieldMeta(Type::String, name, is_primary);
+    }
+
+    static FieldMeta register_number_field(const std::string &name,
+                                           bool is_primary) {
+        return FieldMeta(Type::Number, name, is_primary);
+    }
+
+    static FieldMeta register_boolean_field(const std::string &name,
+                                            bool is_primary) {
+        return FieldMeta(Type::Boolean, name, is_primary);
+    }
 };
 
-// Field represents one instance of a field which type is specified by the meta.
+// Field is a instance of one kind of field.
 // NOTE:the caller of the constructor is responsible to ensure the field meta is
 // consistant with the provided field value.
 struct Field {
-    const FieldMeta *meta;
-
     // the value of the field
-    union {
-        int int_value;
-        bool bool_value;
-    } small_value;
-    std::string string_value;
+    struct Value {
+        union {
+            int int_value;
+            bool bool_value;
+        } small_value;
+        std::string string_value;
+
+        Value() {}
+        Value(const std::string &value) : string_value(value) {}
+        Value(const int value) : small_value({.int_value = value}) {}
+        Value(const bool value) : small_value({.bool_value = value}) {}
+    };
+
+    const FieldMeta *meta;
+    Value value;
 
     Field(const FieldMeta *meta) : meta(meta) {}
-    Field(const FieldMeta *meta, std::string value)
-        : meta(meta), string_value(value) {}
+    Field(const FieldMeta *meta, const std::string &value)
+        : meta(meta), value(value) {}
     // union initialization best practice?
-    Field(const FieldMeta *meta, int value)
-        : meta(meta), small_value({.int_value = value}) {}
-    Field(const FieldMeta *meta, bool value)
-        : meta(meta), small_value({.bool_value = value}) {}
+    Field(const FieldMeta *meta, int value) : meta(meta), value(value) {}
+    Field(const FieldMeta *meta, bool value) : meta(meta), value(value) {}
 
+    // FIXME: make sure lhs and rhs are of the same field type
     bool operator==(const Field &rhs) const {
         switch (meta->type) {
-        case FieldType::Number:
-            return this->small_value.int_value == rhs.small_value.int_value;
-        case FieldType::Boolean:
-            return this->small_value.bool_value == rhs.small_value.bool_value;
-        case FieldType::String:
-            return this->string_value == rhs.string_value;
-        case FieldType::Infimum:
+        case FieldMeta::Type::Number:
+            return this->value.small_value.int_value ==
+                   rhs.value.small_value.int_value;
+        case FieldMeta::Type::Boolean:
+            return this->value.small_value.bool_value ==
+                   rhs.value.small_value.bool_value;
+        case FieldMeta::Type::String:
+            return this->value.string_value == rhs.value.string_value;
+        case FieldMeta::Type::Infimum:
             return false;
-        case FieldType::Supremum:
+        case FieldMeta::Type::Supremum:
+            return false;
+        default:
             return false;
         }
     }
@@ -74,15 +105,17 @@ struct Field {
 
     bool operator<(const Field &rhs) const {
         switch (meta->type) {
-        case FieldType::Number:
-            return this->small_value.int_value < rhs.small_value.int_value;
-        case FieldType::Boolean:
-            return this->small_value.bool_value < rhs.small_value.bool_value;
-        case FieldType::String:
-            return this->string_value < rhs.string_value;
-        case FieldType::Infimum:
+        case FieldMeta::Type::Number:
+            return this->value.small_value.int_value <
+                   rhs.value.small_value.int_value;
+        case FieldMeta::Type::Boolean:
+            return this->value.small_value.bool_value <
+                   rhs.value.small_value.bool_value;
+        case FieldMeta::Type::String:
+            return this->value.string_value < rhs.value.string_value;
+        case FieldMeta::Type::Infimum:
             return true;
-        case FieldType::Supremum:
+        case FieldMeta::Type::Supremum:
             return false;
         }
     }
@@ -93,96 +126,150 @@ struct Field {
     bool operator<=(const Field &rhs) const { return !(*this > rhs); }
 
     bool operator>=(const Field &rhs) const { return !(*this < rhs); }
+
+    FieldMeta::Type type() const { return meta->type; }
+
+    friend std::ostream &operator<<(std::ostream &os, const Field &field) {
+        switch (field.type()) {
+        case FieldMeta::Type::Number:
+            os << std::format("[number {}]", field.value.small_value.int_value);
+            break;
+        case FieldMeta::Type::Boolean:
+            os << std::format("[boolean {}]",
+                              field.value.small_value.bool_value);
+            break;
+        case FieldMeta::Type::String:
+            os << std::format("[number {}]", field.value.string_value);
+            break;
+        case FieldMeta::Type::Infimum:
+            os << "[infimum]";
+            break;
+        case FieldMeta::Type::Supremum:
+            os << "[supremum]";
+            break;
+        default:
+            os << "[unknown???]";
+            break;
+        }
+        return os;
+    }
 };
 
-// FIXME: make sure the field's uniqueness
+// Key is an alias of Field. FIXME: make sure the field's uniqueness
 using Key = Field;
-
-extern const FieldMeta InfiFieldMeta, SupreFieldMeta;
-extern const Key InfimumKey, SupremumKey;
-
 using FieldList = std::vector<Field>;
-
-// type of the record.
-enum class RecordType { Conventional, Node, Infi, Supre };
 
 // RecordMeta contains the metadata of a kind of record; shared by all records
 // of that kind.
 struct RecordMeta {
-    RecordType type;
+    // type of the record.
+    enum class Type { Common, Node, Infi, Supre };
+
+    Type type;
     int number_of_columns;
-    // FIXME: is the table this record belongs to important?
+    // FIXME: does the table this record belongs to matter?
+
+    RecordMeta(const Type type, const int number_of_columns)
+        : type(type), number_of_columns(number_of_columns) {}
+
+    // static new_string_record_meta();
+    // static new_string_record_meta()
+    // static new_string_record_meta()
 };
 
-// a record presenets a row of data.
-struct RecordHdr {
-    const RecordMeta *meta;
+class Record {
+public:
+public:
+    friend class Index;
+    friend class IndexNode;
+
+    // only set meta when constructing
+    Record(const RecordMeta *meta)
+        : meta_(meta), order_(0), next_record_offset_(0),
+          next_(nullptr) /* , prev_(nullptr) */
+    {}
+
+    virtual ~Record() = default;
+
+    virtual const Key &key() const = 0;
+    virtual void set_key(Key key) = 0;
+
+    RecordMeta::Type type() const { return meta_->type; }
+
+    int order() { return order_; }
+    void set_order(int order) { this->order_ = order; }
+
+    uint16_t next_record_offset() { return next_record_offset_; }
+    void set_next_record_offset(uint16_t offset) {
+        this->next_record_offset_ = offset;
+    }
+
+    Record *next_record() const { return next_; }
+    void set_next_record(Record *next) { this->next_ = next; }
+    // Record *prev_record() const { return prev_; }
+    // void set_prev_record(Record *prev) { this->prev_ = prev; }
+
+    virtual bool is_leaf() const = 0;
+
+    const RecordMeta *meta() const { return meta_; }
+
+    bool is_supremum() const { return type() == RecordMeta::Type::Supre; }
+    bool is_infimum() const { return type() == RecordMeta::Type::Infi; }
+
+protected:
+    const RecordMeta *meta_;
 
     // user record starts from 2; Infimum is always order 0, supremum is always
     // order 1.
     // this field is decided when the record is inserted into the page.
-    int order;
+    int order_;
 
     // NOTE:status of the record, as a placeholder for now.
-    uint8_t flag;
+    uint8_t flag_;
 
     // number of records owned
     // uint8_t num_records_owned;
 
     // NOTE: the len of the record must be smaller than 2^16 bytes for now.
     // this field is decided when the record is inserted into the page.
-    uint16_t next_record_offset;
-
-    RecordHdr(const RecordMeta *meta) : meta(meta) {}
-};
-
-class Record {
-public:
-public:
-    Record(const RecordMeta *meta) : record_hdr_(meta) {}
-
-    virtual ~Record() = default;
-
-    virtual const Key &key() const = 0;
-
-    RecordType type() { return record_hdr_.meta->type; }
-    int order() { return record_hdr_.order; }
-    uint16_t next_record_offset() { return record_hdr_.next_record_offset; }
-
-    void set_order(int order) { this->record_hdr_.order = order; }
-    void set_next_record_offset(uint16_t offset) {
-        this->record_hdr_.next_record_offset = offset;
-    }
-
-    Record *next_record() { return next; }
-
-private:
-    RecordHdr record_hdr_;
+    uint16_t next_record_offset_;
     // a link to the next record, creating a singly linked list for all records
-    // in the same index page.
-    Record *next;
+    // in the same index node.
+    Record *next_;
+    // Record *prev_;
 };
 
 struct InfiRecord : public Record {
-    virtual const Key &key() const { return key_; }
-    Key key_;
+    static inline const RecordMeta InfiMeta =
+        RecordMeta(RecordMeta::Type::Infi, 0);
+    static inline const FieldMeta InfiKeyMeta =
+        FieldMeta(FieldMeta::Type::Infimum, "infimum", false);
+    static inline const Key InfiKey = Key(&InfiKeyMeta);
 
-    InfiRecord(const RecordMeta *meta, Key key) : Record(meta), key_(key) {}
+    InfiRecord() : Record(&InfiMeta) {}
+
+    virtual const Key &key() const { return InfiKey; }
+    virtual void set_key(Key key) {}
+
+    virtual bool is_leaf() const { return false; }
 };
 
 struct SupreRecord : public Record {
-    virtual const Key &key() const { return key_; }
-    Key key_;
+    // virtual const Key &key() const { return key_; }
+    static inline const RecordMeta SupreMeta =
+        RecordMeta(RecordMeta::Type::Supre, 0);
+    static inline const FieldMeta SupreKeyMeta =
+        FieldMeta(FieldMeta::Type::Supremum, "supremum", false);
+    static inline const Key SupreKey = Key(&SupreKeyMeta);
+    // Key key_;
 
-    SupreRecord(const RecordMeta *meta, Key key) : Record(meta), key_(key) {}
+    SupreRecord() : Record(&SupreMeta) {}
+
+    virtual const Key &key() const { return SupreKey; }
+    virtual void set_key(Key key) {}
+
+    virtual bool is_leaf() const { return false; }
 };
-
-extern const RecordMeta InfiRecordMeta;
-extern const RecordMeta SupreRecordMeta;
-// the global variable for all inifmum records
-extern const InfiRecord Infimum;
-// the global variable for all supremum records
-extern const SupreRecord Supremum;
 
 // ClusteredRecord represents a record in a clustered index's leaf page.
 class ClusteredRecord : public Record {
@@ -190,11 +277,16 @@ public:
     ClusteredRecord(const RecordMeta *meta, Key key) : Record(meta), key_(key) {
         non_key_fields.reserve(meta->number_of_columns);
     }
-    ~ClusteredRecord() {}
 
+    ~ClusteredRecord() = default;
+
+    // TODO: use emplace?
     void add_column(Field column) { non_key_fields.push_back(column); }
 
     virtual const Key &key() const { return key_; }
+    virtual void set_key(Key key) { key_ = key; }
+
+    virtual bool is_leaf() const { return true; }
 
 private:
     Key key_;
@@ -208,15 +300,19 @@ public:
     NodeRecord(const RecordMeta *meta, Key key) : Record(meta), key_(key) {}
     ~NodeRecord() {}
 
-    void set_child_page(IndexNode *child_page) {
-        this->child_node = child_page;
+    void set_child_node(IndexNode *child_node) {
+        this->child_node_ = child_node;
     }
+    IndexNode *child_node() const { return child_node_; }
 
     virtual const Key &key() const { return key_; }
+    virtual void set_key(Key key) { key_ = key; }
+
+    virtual bool is_leaf() const { return false; }
 
 private:
     Key key_;
-    IndexNode *child_node;
+    IndexNode *child_node_;
 };
 
 // SecondaryRecord represents a record in a secondary index's leaf page.
@@ -229,6 +325,9 @@ public:
     ~SecondaryRecord() {}
 
     virtual const Key &key() const { return key_; }
+    virtual void set_key(Key key) { key_ = key; }
+
+    virtual bool is_leaf() const { return true; }
 
 private:
     Field secondary_record_;
@@ -247,6 +346,8 @@ public:
     }
 
     virtual const Key &key() const { return key_; }
+
+    virtual void set_key(Key key) { key_ = key; }
 
 private:
     Field secondary_record_;
