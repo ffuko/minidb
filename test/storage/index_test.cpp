@@ -68,6 +68,47 @@ TEST(IndexTest, InsertMany) {
     }
 }
 
+TEST(IndexTest, InsertRandom) {
+    Index index = Index();
+    RecordMeta int_string_record = RecordMeta(RecordMeta::Type::Common, 1);
+    FieldMeta key_meta = FieldMeta::register_string_field("name", true);
+
+    std::vector<std::pair<Key, Record *>> keys;
+    keys.reserve(100);
+
+    for (int i = 0; i < 1000; i++) {
+        Key key = Key(&key_meta, std::format("john{}", i));
+        Record *record = new ClusteredRecord(&int_string_record, key);
+
+        keys.push_back(std::make_pair(key, record));
+    }
+
+    auto rng = std::default_random_engine{};
+    std::shuffle(std::begin(keys), std::end(keys), rng);
+
+    for (auto p : keys) {
+        ASSERT_EQ(ErrorCode::Success, index.insert_record(p.second));
+    }
+
+    GTEST_COUT << std::format("the depth of the index: {}", index.depth())
+               << std::endl;
+    GTEST_COUT << std::format("the number of the index's records: {}",
+                              index.number_of_records())
+               << std::endl;
+    ASSERT_EQ(1000, index.number_of_records());
+
+    std::shuffle(std::begin(keys), std::end(keys), rng);
+
+    for (auto &pair : keys) {
+        Key key = pair.first;
+        Record *expected_record = pair.second;
+
+        auto record = index.search_record(key);
+        ASSERT_EQ(expected_record, record.value())
+            << "search error, the key is " << key;
+    }
+}
+
 TEST(IndexTest, DeleteBasic) {
     Index index = Index();
     RecordMeta int_string_record = RecordMeta(RecordMeta::Type::Common, 1);

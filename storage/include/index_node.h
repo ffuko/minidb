@@ -90,15 +90,6 @@ public:
     }
 
     ErrorCode insert_record(Record *insert_record) {
-        // last_inserted pointer is valid
-        if (!last_inserted_->is_infimum()) {
-            auto after_insert = last_inserted_->next_record();
-            last_inserted_->set_next_record(insert_record);
-            insert_record->set_next_record(after_insert);
-
-            return ErrorCode::Success;
-        }
-
         Record *record = infimum();
         while (!record->next_record()->is_supremum() &&
                record->next_record()->key() < insert_record->key()) {
@@ -130,9 +121,6 @@ public:
             return ErrorCode::KeyNotFound;
         } else {
             Record *to_delete = record->next_record();
-            // FIXME:
-            if (to_delete == last_inserted_)
-                last_inserted_ = infimum();
             Record *after_deleted = record->next_record()->next_record();
             record->set_next_record(after_deleted);
 
@@ -205,7 +193,7 @@ private:
 
     // TODO: page directory
 
-    // last inserted record
+    // last inserted record; TODO: how to use it to insert more efficiently.
     Record *last_inserted_;
 
     IndexNode *parent_node_;
