@@ -116,8 +116,7 @@ public:
             record = record->next_record();
         }
 
-        if (record->next_record()->is_supremum() &&
-            record->next_record()->key() != key) {
+        if (record->next_record()->key() != key) {
             return ErrorCode::KeyNotFound;
         } else {
             Record *to_delete = record->next_record();
