@@ -1,3 +1,4 @@
+#include "error.h"
 #include "index.h"
 #include "record.h"
 #include "gtest/gtest.h"
@@ -23,13 +24,13 @@ TEST(IndexTest, InsertBasic) {
     Record *new_record3 = new ClusteredRecord(
         &int_string_record, Key(&key_meta, std::string("john2")));
 
-    ASSERT_EQ(Index::OpStatus::Success, index.insert_record(new_record1));
-    ASSERT_EQ(Index::OpStatus::Success, index.insert_record(new_record2));
-    Record *record = index.search_record(Key(&key_meta, std::string("john1")));
+    ASSERT_EQ(ErrorCode::Success, index.insert_record(new_record1));
+    ASSERT_EQ(ErrorCode::Success, index.insert_record(new_record2));
+    auto record = index.search_record(Key(&key_meta, std::string("john1")));
 
-    ASSERT_EQ(new_record1, record);
+    ASSERT_EQ(new_record1, record.value());
     auto status = index.insert_record(new_record2);
-    ASSERT_EQ(status, Index::OpStatus::Failure);
+    ASSERT_EQ(status, ErrorCode::KeyAlreadyExist);
 }
 
 TEST(IndexTest, InsertMany) {
@@ -45,7 +46,7 @@ TEST(IndexTest, InsertMany) {
         Record *record = new ClusteredRecord(&int_string_record, key);
 
         keys.push_back(std::make_pair(key, record));
-        ASSERT_EQ(Index::OpStatus::Success, index.insert_record(record));
+        ASSERT_EQ(ErrorCode::Success, index.insert_record(record));
     }
     GTEST_COUT << std::format("the depth of the index: {}", index.depth())
                << std::endl;
@@ -61,8 +62,8 @@ TEST(IndexTest, InsertMany) {
         Key key = pair.first;
         Record *expected_record = pair.second;
 
-        Record *record = index.search_record(key);
-        ASSERT_EQ(expected_record, record)
+        auto record = index.search_record(key);
+        ASSERT_EQ(expected_record, record.value())
             << "search error, the key is " << key;
     }
 }
@@ -79,18 +80,18 @@ TEST(IndexTest, DeleteBasic) {
     Record *new_record2 = new ClusteredRecord(&int_string_record, key2);
     Record *new_record3 = new ClusteredRecord(&int_string_record, key3);
 
-    ASSERT_EQ(Index::OpStatus::Success, index.insert_record(new_record1));
-    ASSERT_EQ(Index::OpStatus::Success, index.insert_record(new_record2));
+    ASSERT_EQ(ErrorCode::Success, index.insert_record(new_record1));
+    ASSERT_EQ(ErrorCode::Success, index.insert_record(new_record2));
     ASSERT_EQ(2, index.number_of_records());
 
-    ASSERT_EQ(Index::OpStatus::Success, index.remove_record(key1));
-    ASSERT_EQ(nullptr, index.search_record(key1));
+    ASSERT_EQ(ErrorCode::Success, index.remove_record(key1));
+    ASSERT_EQ(ErrorCode::KeyNotFound, index.search_record(key1).error());
     ASSERT_EQ(1, index.number_of_records());
 
     auto status = index.insert_record(new_record3);
-    ASSERT_EQ(status, Index::OpStatus::Success);
+    ASSERT_EQ(status, ErrorCode::Success);
     ASSERT_EQ(2, index.number_of_records());
-    ASSERT_EQ(new_record3, index.search_record(key3));
+    ASSERT_EQ(new_record3, index.search_record(key3).value());
 }
 
 TEST(IndexTest, DeleteMany) {
@@ -116,14 +117,14 @@ TEST(IndexTest, DeleteMany) {
         Key key = pair.first;
         Record *expected_record = pair.second;
 
-        Record *before_delete = index.search_record(key);
-        ASSERT_EQ(expected_record, before_delete);
+        auto before_delete = index.search_record(key);
+        ASSERT_EQ(expected_record, before_delete.value());
 
         auto status = index.remove_record(key);
-        ASSERT_EQ(Index::OpStatus::Success, status);
+        ASSERT_EQ(ErrorCode::Success, status);
 
-        Record *after_delete = index.search_record(key);
-        ASSERT_EQ(nullptr, after_delete);
+        auto after_delete = index.search_record(key);
+        ASSERT_EQ(ErrorCode::KeyNotFound, after_delete.error());
     }
 
     ASSERT_EQ(0, index.number_of_records());

@@ -1,12 +1,13 @@
-#pragma once
+#ifndef STORAGE_INCLUDE_INDEX_NODE_H
+#define STORAGE_INCLUDE_INDEX_NODE_H
 
+#include "error.h"
 #include "record.h"
 #include "types.h"
 #include <cstdint>
 #include <memory>
+#include <tl/expected.hpp>
 
-// #include "storage/common/error.h"
-// FIXME: standardize index operation return code
 namespace storage {
 
 // IndexHdr contains the unique metadata of a index page.
@@ -42,8 +43,6 @@ struct IndexNodeHdr {
 class IndexNode {
 public:
     friend class Index;
-    // operation status
-    enum class OpStatus { Success, Failure };
 
     // TODO: placeholder for now; more suitable option.
 #ifdef DEBUG
@@ -74,14 +73,30 @@ public:
     IndexNode(const IndexNode &index) = delete;
     IndexNode &operator=(const IndexNode &index) = delete;
 
-    OpStatus insert_record(Record *insert_record) {
+    tl::expected<Record *, ErrorCode> search_key(const Key &key) {
+        Record *record = first_record();
+
+        // inner index node search
+        while (!record->is_supremum()) {
+            if (key > record->key()) {
+                record = record->next_record();
+            } else if (key == record->key()) {
+                return record;
+            } else {
+                return tl::unexpected(ErrorCode::KeyNotFound);
+            }
+        }
+        return tl::unexpected(ErrorCode::KeyNotFound);
+    }
+
+    ErrorCode insert_record(Record *insert_record) {
         // last_inserted pointer is valid
         if (!last_inserted_->is_infimum()) {
             auto after_insert = last_inserted_->next_record();
             last_inserted_->set_next_record(insert_record);
             insert_record->set_next_record(after_insert);
 
-            return OpStatus::Success;
+            return ErrorCode::Success;
         }
 
         Record *record = infimum();
@@ -92,8 +107,7 @@ public:
 
         if (!record->next_record()->is_supremum() &&
             record->next_record()->key() == insert_record->key()) {
-            // TODO: return a key-already-existed error
-            return OpStatus::Failure;
+            return ErrorCode::KeyAlreadyExist;
         }
 
         Record *after_insert = record->next_record();
@@ -101,10 +115,10 @@ public:
         insert_record->set_next_record(after_insert);
 
         hdr_.number_of_records++;
-        return OpStatus::Success;
+        return ErrorCode::Success;
     }
 
-    OpStatus remove_record(Key key) {
+    ErrorCode remove_record(const Key &key) {
         Record *record = infimum();
         while (!record->next_record()->is_supremum() &&
                record->next_record()->key() != key) {
@@ -113,7 +127,7 @@ public:
 
         if (record->next_record()->is_supremum() &&
             record->next_record()->key() != key) {
-            return OpStatus::Failure;
+            return ErrorCode::KeyNotFound;
         } else {
             Record *to_delete = record->next_record();
             // FIXME:
@@ -124,7 +138,7 @@ public:
 
             delete to_delete;
         }
-        return OpStatus::Success;
+        return ErrorCode::Success;
     }
 
     void set_parent_node(IndexNode *parent) { this->parent_node_ = parent; }
@@ -179,7 +193,6 @@ public:
         if (prev_record->next_record()->key() == record->key())
             return prev_record;
         else
-            // TODO: return a key-not-found error
             return nullptr;
     }
 
@@ -212,4 +225,4 @@ private:
 
 } // namespace storage
 
-// namespace storage
+#endif // !STORAGE_INCLUDE_INDEX_NODE_H

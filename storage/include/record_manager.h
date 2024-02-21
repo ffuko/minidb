@@ -1,4 +1,5 @@
-#pragma once
+#ifndef STORAGE_INCLUDE_RECORD_MANAGER_H
+#define STORAGE_INCLUDE_RECORD_MANAGER_H
 
 #include "record.h"
 #include <string>
@@ -11,7 +12,7 @@ public:
     RecordManager() {}
     ~RecordManager() = default;
 
-    void register_record(RecordType type, FieldMeta key_meta,
+    void register_record(RecordMeta::Type type, FieldMeta key_meta,
                          FieldMeta column_metas...) {}
 
 private:
@@ -19,3 +20,5 @@ private:
 };
 
 } // namespace storage
+
+#endif

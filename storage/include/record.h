@@ -1,4 +1,5 @@
-#pragma once
+#ifndef STORAGE_INCLUDE_RECORD_H
+#define STORAGE_INCLUDE_RECORD_H
 
 #include <cstdint>
 #include <format>
@@ -7,8 +8,6 @@
 #include <sys/types.h>
 #include <vector>
 
-// TODO: is it possible to reduce parameter copy in all record classes
-// construction.
 namespace storage {
 
 class IndexNode;
@@ -117,6 +116,8 @@ struct Field {
             return true;
         case FieldMeta::Type::Supremum:
             return false;
+        default:
+            return false;
         }
     }
 
@@ -192,7 +193,7 @@ public:
     virtual ~Record() = default;
 
     virtual const Key &key() const = 0;
-    virtual void set_key(Key key) = 0;
+    virtual void set_key(const Key &key) = 0;
 
     RecordMeta::Type type() const { return meta_->type; }
 
@@ -249,9 +250,11 @@ struct InfiRecord : public Record {
     InfiRecord() : Record(&InfiMeta) {}
 
     virtual const Key &key() const { return InfiKey; }
-    virtual void set_key(Key key) {}
 
     virtual bool is_leaf() const { return false; }
+
+private:
+    virtual void set_key(const Key &key) {}
 };
 
 struct SupreRecord : public Record {
@@ -266,15 +269,18 @@ struct SupreRecord : public Record {
     SupreRecord() : Record(&SupreMeta) {}
 
     virtual const Key &key() const { return SupreKey; }
-    virtual void set_key(Key key) {}
 
     virtual bool is_leaf() const { return false; }
+
+private:
+    virtual void set_key(const Key &key) {}
 };
 
 // ClusteredRecord represents a record in a clustered index's leaf page.
 class ClusteredRecord : public Record {
 public:
-    ClusteredRecord(const RecordMeta *meta, Key key) : Record(meta), key_(key) {
+    ClusteredRecord(const RecordMeta *meta, const Key &key)
+        : Record(meta), key_(key) {
         non_key_fields.reserve(meta->number_of_columns);
     }
 
@@ -284,7 +290,7 @@ public:
     void add_column(Field column) { non_key_fields.push_back(column); }
 
     virtual const Key &key() const { return key_; }
-    virtual void set_key(Key key) { key_ = key; }
+    virtual void set_key(const Key &key) { key_ = key; }
 
     virtual bool is_leaf() const { return true; }
 
@@ -306,7 +312,7 @@ public:
     IndexNode *child_node() const { return child_node_; }
 
     virtual const Key &key() const { return key_; }
-    virtual void set_key(Key key) { key_ = key; }
+    virtual void set_key(const Key &key) { key_ = key; }
 
     virtual bool is_leaf() const { return false; }
 
@@ -325,7 +331,7 @@ public:
     ~SecondaryRecord() {}
 
     virtual const Key &key() const { return key_; }
-    virtual void set_key(Key key) { key_ = key; }
+    virtual void set_key(const Key &key) { key_ = key; }
 
     virtual bool is_leaf() const { return true; }
 
@@ -347,7 +353,7 @@ public:
 
     virtual const Key &key() const { return key_; }
 
-    virtual void set_key(Key key) { key_ = key; }
+    virtual void set_key(const Key &key) { key_ = key; }
 
 private:
     Field secondary_record_;
@@ -357,3 +363,5 @@ private:
 };
 
 } // namespace storage
+
+#endif

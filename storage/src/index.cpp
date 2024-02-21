@@ -1,14 +1,13 @@
 #include "index.h"
+#include "error.h"
 #include "record.h"
-#include "gtest/gtest.h"
 #include <cmath>
-#include <iostream>
 #include <memory>
 
 namespace storage {
 
-// search the leaf node where the key is stored in, return nullptr if not found.
-IndexNode *Index::search_leaf(Key key) {
+// search the leaf node where the key is stored in
+tl::expected<IndexNode *, ErrorCode> Index::search_leaf(const Key &key) {
     IndexNode *node = this->root_;
     Record *record;
 
@@ -21,8 +20,7 @@ IndexNode *Index::search_leaf(Key key) {
         assert(!node->is_leaf());
 #endif // !DEBUG
         if (node->is_empty() || node->first_record()->is_supremum())
-            // TODO: return node not found error?
-            return nullptr;
+            return tl::unexpected(ErrorCode::NodeNotFound);
 
         record = node->first_record();
         // inner index node search, from infi record to supre record
@@ -39,40 +37,23 @@ IndexNode *Index::search_leaf(Key key) {
 }
 
 // search the record of the corresponding key, return nullptr if not found.
-Record *Index::search_record(Key key) {
-    IndexNode *node = search_leaf(key);
-
-    if (node == nullptr)
-        return nullptr;
-
-    Record *record = node->first_record();
-
-    // inner index node search
-    while (!record->is_supremum()) {
-        if (key > record->key()) {
-            record = record->next_record();
-        } else if (key == record->key()) {
-            return record;
-        } else {
-            return nullptr;
-        }
-    }
-
-    // TODO: return key-not-found error?
-    return nullptr;
+tl::expected<Record *, ErrorCode> Index::search_record(const Key &key) {
+    return search_leaf(key).and_then(
+        [&](auto node) { return node->search_key(key); });
 }
 
 // TODO: use one-way-down insert instead by ensuring the characteristics of the
 // tree when performing searching.
-Index::OpStatus Index::insert_record(Record *insert_record) {
-    IndexNode *node = search_leaf(insert_record->key());
+ErrorCode Index::insert_record(Record *insert_record) {
+    auto leaf = search_leaf(insert_record->key());
 
+    if (!leaf.has_value())
+        return leaf.error();
+
+    auto node = leaf.value();
 #ifdef DEBUG
     assert(node->is_leaf() && node != nullptr);
 #endif // DEBUG
-
-    if (node == nullptr)
-        return OpStatus::Failure;
 
     // case 1: the node is not full, insert directly.
     if (!node->is_full()) {
@@ -85,16 +66,17 @@ Index::OpStatus Index::insert_record(Record *insert_record) {
     safe_node_split(node, node->parent_node());
     insert_not_full(node, insert_record);
 
-    return Index::OpStatus::Success;
+    return ErrorCode::Success;
 }
 
 // insert a record into a not full node.
-Index::OpStatus Index::insert_not_full(IndexNode *node, Record *insert_record) {
+ErrorCode Index::insert_not_full(IndexNode *node, Record *insert_record) {
     auto status = node->insert_record(insert_record);
-    if (status == IndexNode::OpStatus::Failure)
-        return Index::OpStatus::Failure;
+    if (status != ErrorCode::Success)
+        return status;
+
     number_of_records_++;
-    return Index::OpStatus::Success;
+    return ErrorCode::Success;
 }
 
 // try to rebalance the tree from a full leaf node.
@@ -181,7 +163,7 @@ void Index::safe_node_split(IndexNode *node, IndexNode *parent) {
     new_parent_record->set_child_node(new_node);
 }
 
-Index::OpStatus Index::full_scan(RecordTraverseFunc func) {
+ErrorCode Index::full_scan(RecordTraverseFunc func) {
     IndexNode *node = this->root_;
     Record *record;
 
@@ -189,7 +171,7 @@ Index::OpStatus Index::full_scan(RecordTraverseFunc func) {
     for (int i = 1; i < this->depth_; i++) {
         record = node->first_record();
         if (record->is_leaf())
-            return Index::OpStatus::Failure;
+            return ErrorCode::Failure;
         // FIXME: dangeous cast
         node = dynamic_cast<NodeRecord *>(record)->child_node();
     }
@@ -205,16 +187,20 @@ Index::OpStatus Index::full_scan(RecordTraverseFunc func) {
         node = node->next_node();
     }
 
-    return Index::OpStatus::Success;
+    return ErrorCode::Success;
 }
 
 // TODO: for debug and memory cleanup
-Index::OpStatus Index::full_node_scan(NodeTraverseFunc func) {
-    return Index::OpStatus::Success;
+ErrorCode Index::full_node_scan(NodeTraverseFunc func) {
+    return ErrorCode::Success;
 }
 
-Index::OpStatus Index::remove_record(Key key) {
-    IndexNode *node = search_leaf(key);
+ErrorCode Index::remove_record(const Key &key) {
+    auto leaf = search_leaf(key);
+    if (!leaf.has_value())
+        return leaf.error();
+
+    auto node = leaf.value();
 
     Record *record;
     if (node->is_half_full()) {
@@ -255,7 +241,7 @@ Index::OpStatus Index::remove_record(Key key) {
                 node->infimum()->set_next_record(to_move);
                 to_move->set_next_record(first_record);
             } else {
-                return Index::OpStatus::Failure;
+                return ErrorCode::Failure;
             }
         }
     }
@@ -263,15 +249,15 @@ Index::OpStatus Index::remove_record(Key key) {
     // a normal delete
     if (!node->is_half_full()) {
         auto status = node->remove_record(key);
-        if (status == IndexNode::OpStatus::Failure) {
-            return OpStatus::Failure;
+        if (status == ErrorCode::Failure) {
+            return ErrorCode::Failure;
         } else {
             number_of_records_--;
-            return OpStatus::Success;
+            return ErrorCode::Success;
         }
     }
 
-    return OpStatus::Failure;
+    return ErrorCode::Failure;
 }
 
 // if necessary to do union with a sibling, do it and return the node after

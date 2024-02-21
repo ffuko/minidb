@@ -1,12 +1,15 @@
 /*
  * b+ tree implementation.
  * */
-#pragma once
+#ifndef STORAGE_INCLUDE_INDEX_H
+#define STORAGE_INCLUDE_INDEX_H
 
+#include "error.h"
 #include "index_node.h"
 #include "record.h"
 #include "types.h"
 #include <functional>
+#include <tl/expected.hpp>
 
 namespace storage {
 
@@ -23,9 +26,6 @@ public:
     using RecordTraverseFunc = std::function<void(Key, Record *)>;
     using NodeTraverseFunc = std::function<void(IndexNode *)>;
 
-    // NOTE: for debug
-    enum class OpStatus { Success, Failure, TreeGrow, TreeShrink };
-
     static inline IndexID number_of_indexes = 0;
 
 public:
@@ -34,14 +34,14 @@ public:
           depth_(1), number_of_records_(0) {}
     ~Index() = default;
 
-    Record *search_record(Key key);
+    tl::expected<Record *, ErrorCode> search_record(const Key &key);
     // insert a clusterd leaf record.
-    OpStatus insert_record(Record *record);
+    ErrorCode insert_record(Record *record);
     // remove a clusterd leaf record.
-    OpStatus remove_record(Key key);
+    ErrorCode remove_record(const Key &key);
 
-    Index::OpStatus full_node_scan(NodeTraverseFunc func);
-    OpStatus full_scan(RecordTraverseFunc func);
+    ErrorCode full_node_scan(NodeTraverseFunc func);
+    ErrorCode full_scan(RecordTraverseFunc func);
 
     int depth() const { return depth_; }
 
@@ -52,11 +52,11 @@ public:
     int number_of_records() const { return number_of_records_; }
 
 private:
-    IndexNode *search_leaf(Key key);
+    tl::expected<IndexNode *, ErrorCode> search_leaf(const Key &key);
     void rebalance(IndexNode *node);
     void rebalance_internal(IndexNode *node);
 
-    OpStatus insert_not_full(IndexNode *node, Record *insert_record);
+    ErrorCode insert_not_full(IndexNode *node, Record *insert_record);
     void safe_node_split(IndexNode *node, IndexNode *parent);
 
     IndexNode *union_node(IndexNode *left_node, IndexNode *right_node);
@@ -75,3 +75,4 @@ private:
 };
 
 } // namespace storage
+#endif
