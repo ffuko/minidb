@@ -9,8 +9,11 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(expected)
 
 add_library(storage_lib STATIC ${SOURCES})
-target_include_directories(storage_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${PROJECT_SOURCE_DIR}/common)
+target_include_directories(
+    storage_lib PUBLIC 
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/common
+)
 
 target_link_libraries(storage_lib PUBLIC expected)
 
