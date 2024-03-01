@@ -26,7 +26,7 @@ public:
     using RecordTraverseFunc = std::function<void(Key, Record *)>;
     using NodeTraverseFunc = std::function<void(IndexNode *)>;
 
-    static inline IndexID number_of_indexes = 0;
+    static inline index_id_t number_of_indexes = 0;
 
 public:
     Index()
@@ -45,8 +45,7 @@ public:
 
     int depth() const { return depth_; }
 
-    IndexID id() const { return id_; }
-
+    index_id_t id() const { return id_; }
     RecordMeta *node_meta() const { return node_meta_.get(); }
 
     int number_of_records() const { return number_of_records_; }
@@ -63,7 +62,7 @@ private:
     IndexNode *sibling_union_check(IndexNode *node);
 
 private:
-    IndexID id_;
+    index_id_t id_;
 
     IndexNode *root_;
     // the depth of the B+ tree, starting from 1 even if the tree is empty.

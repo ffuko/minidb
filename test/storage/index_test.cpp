@@ -17,11 +17,11 @@ TEST(IndexTest, InsertBasic) {
     Index index = Index();
     RecordMeta int_string_record = RecordMeta(RecordMeta::Type::Common, 1);
     FieldMeta key_meta = FieldMeta::register_string_field("name", true);
-    Record *new_record1 = new ClusteredRecord(
+    LeafClusteredRecord *new_record1 = new ClusteredRecord(
         &int_string_record, Key(&key_meta, std::string("john1")));
-    Record *new_record2 = new ClusteredRecord(
+    LeafClusteredRecord *new_record2 = new ClusteredRecord(
         &int_string_record, Key(&key_meta, std::string("john2")));
-    Record *new_record3 = new ClusteredRecord(
+    LeafClusteredRecord *new_record3 = new ClusteredRecord(
         &int_string_record, Key(&key_meta, std::string("john2")));
 
     ASSERT_EQ(ErrorCode::Success, index.insert_record(new_record1));
@@ -38,12 +38,13 @@ TEST(IndexTest, InsertMany) {
     RecordMeta int_string_record = RecordMeta(RecordMeta::Type::Common, 1);
     FieldMeta key_meta = FieldMeta::register_string_field("name", true);
 
-    std::vector<std::pair<Key, Record *>> keys;
+    std::vector<std::pair<Key, LeafClusteredRecord *>> keys;
     keys.reserve(100);
 
     for (int i = 0; i < 1000; i++) {
         Key key = Key(&key_meta, std::format("john{}", i));
-        Record *record = new ClusteredRecord(&int_string_record, key);
+        LeafClusteredRecord *record =
+            new ClusteredRecord(&int_string_record, key);
 
         keys.push_back(std::make_pair(key, record));
         ASSERT_EQ(ErrorCode::Success, index.insert_record(record));
@@ -60,7 +61,7 @@ TEST(IndexTest, InsertMany) {
 
     for (auto &pair : keys) {
         Key key = pair.first;
-        Record *expected_record = pair.second;
+        LeafClusteredRecord *expected_record = pair.second;
 
         auto record = index.search_record(key);
         ASSERT_EQ(expected_record, record.value())
@@ -73,12 +74,13 @@ TEST(IndexTest, InsertRandom) {
     RecordMeta int_string_record = RecordMeta(RecordMeta::Type::Common, 1);
     FieldMeta key_meta = FieldMeta::register_string_field("name", true);
 
-    std::vector<std::pair<Key, Record *>> keys;
+    std::vector<std::pair<Key, LeafClusteredRecord *>> keys;
     keys.reserve(100);
 
     for (int i = 0; i < 1000; i++) {
         Key key = Key(&key_meta, std::format("john{}", i));
-        Record *record = new ClusteredRecord(&int_string_record, key);
+        LeafClusteredRecord *record =
+            new ClusteredRecord(&int_string_record, key);
 
         keys.push_back(std::make_pair(key, record));
     }
@@ -101,7 +103,7 @@ TEST(IndexTest, InsertRandom) {
 
     for (auto &pair : keys) {
         Key key = pair.first;
-        Record *expected_record = pair.second;
+        LeafClusteredRecord *expected_record = pair.second;
 
         auto record = index.search_record(key);
         ASSERT_EQ(expected_record, record.value())
@@ -117,9 +119,12 @@ TEST(IndexTest, DeleteBasic) {
     Key key1 = Key(&key_meta, std::string("john1"));
     Key key2 = Key(&key_meta, std::string("john2"));
     Key key3 = Key(&key_meta, std::string("john3"));
-    Record *new_record1 = new ClusteredRecord(&int_string_record, key1);
-    Record *new_record2 = new ClusteredRecord(&int_string_record, key2);
-    Record *new_record3 = new ClusteredRecord(&int_string_record, key3);
+    LeafClusteredRecord *new_record1 =
+        new ClusteredRecord(&int_string_record, key1);
+    LeafClusteredRecord *new_record2 =
+        new ClusteredRecord(&int_string_record, key2);
+    LeafClusteredRecord *new_record3 =
+        new ClusteredRecord(&int_string_record, key3);
 
     ASSERT_EQ(ErrorCode::Success, index.insert_record(new_record1));
     ASSERT_EQ(ErrorCode::Success, index.insert_record(new_record2));
@@ -140,12 +145,13 @@ TEST(IndexTest, DeleteMany) {
     RecordMeta int_string_record = RecordMeta(RecordMeta::Type::Common, 1);
     FieldMeta key_meta = FieldMeta::register_string_field("name", true);
 
-    std::vector<std::pair<Key, Record *>> keys;
+    std::vector<std::pair<Key, LeafClusteredRecord *>> keys;
     keys.reserve(100);
 
     for (int i = 0; i < 10000; i++) {
         Key key = Key(&key_meta, std::format("john{}", i));
-        Record *record = new ClusteredRecord(&int_string_record, key);
+        LeafClusteredRecord *record =
+            new ClusteredRecord(&int_string_record, key);
 
         keys.push_back(std::make_pair(key, record));
         index.insert_record(record);
@@ -156,7 +162,7 @@ TEST(IndexTest, DeleteMany) {
 
     for (auto &pair : keys) {
         Key key = pair.first;
-        Record *expected_record = pair.second;
+        LeafClusteredRecord *expected_record = pair.second;
 
         auto before_delete = index.search_record(key);
         ASSERT_EQ(expected_record, before_delete.value());

@@ -13,6 +13,7 @@ target_include_directories(
     storage_lib PUBLIC 
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/common
+    ${PROJECT_SOURCE_DIR}/deps
 )
 
 target_link_libraries(storage_lib PUBLIC expected)

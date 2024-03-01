@@ -12,17 +12,26 @@ namespace storage {
 using frame_id_t = size_t;
 // type for page number
 using page_id_t = uint32_t;
+// page offset in bytes
+using page_off_t = uint32_t;
 // type for record number in a page
 using record_id_t = uint32_t;
 using index_id_t = uint8_t;
 
-class Record;
+using key_t = uint8_t;
+using value_t = uint8_t;
+using record_t = uint8_t;
+enum class KeyType : key_t { Int, Double, String };
+
+enum class ValueType : value_t { Bool, Int, Double, String };
+enum class RecordType : record_t { Infi, Supre, Leaf, Internal };
 
 // any comparable value for bpree comparsion, including bool, int, float,
 // std::string, Record*.
 // NOTE: any is a dressed-up void*. variant is a dressed-up
 // union any cannot store non-copy or non-move able types. variant can.
-using Value = std::variant<bool, int, double, std::string, Record *>;
+using Key = std::variant<int, double, std::string>;
+using Value = std::variant<bool, int, double, std::string>;
 using Comparator = std::function<int(const Value &, const Value &)>;
 } // namespace storage
 
