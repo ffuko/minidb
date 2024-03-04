@@ -2,6 +2,7 @@
 #include "index/index.h"
 #include "types.h"
 #include <gtest/gtest.h>
+#include <random>
 #include <vector>
 
 using namespace storage;
@@ -9,7 +10,7 @@ using namespace storage;
     std::cout << "-----------------------------------------------------------" \
               << std::endl
 
-TEST(IndexTest, BasicInsertTest) {
+TEST(IndexTest, BasicTest) {
     KeyMeta key_meta = {"id", storage::key_t(KeyType::Int)};
     FieldMeta field_meta = {"score", storage::key_t(KeyType::Int)};
     std::vector<FieldMeta> fields_meta = {field_meta};

@@ -85,34 +85,38 @@ public:
         return frame_->page()->hdr.number_of_records;
     }
 
+    // return the first key of the node.
+    // if the node is empty, return zero value.
+    Key key() {
+        if (number_of_records() == 0)
+            return Key{};
+        auto first = first_user_cursor();
+        return first.record.key;
+    }
+
     // search for the left sibling or the desired key, whose is <= desired
     // record.
     // FIXME: use binary search?
     tl::expected<Cursor<R>, ErrorCode> get_cursor(const Key &key) {
-        R record;
-        page_off_t cur;
-        // NOTE: first record of an internal index page is always the minimal
-        // and meaningless.
-        first_record(record);
-        next_record(record);
+        auto cursor = first_user_cursor();
 
         int i = 0;
         // found the right sibling
         while (i < number_of_records()) {
+            auto &record = cursor.record;
             if (record.key.index() != key.index())
                 return tl::unexpected(ErrorCode::InvalidKeyType);
             else if (record.key == key)
-                return Cursor<R>{frame_->pgno(), frame_->gpos() - record.len(),
-                                 record};
+                return Cursor<R>{frame_->pgno(), cursor.offset, cursor.record};
             else if (record.key > key)
                 break;
 
-            next_record(record);
+            cursor = next_cursor(cursor);
             i++;
         }
 
-        prev_record(record);
-        return Cursor<R>{frame_->pgno(), frame_->gpos() - record.len(), record};
+        cursor = prev_cursor(cursor);
+        return Cursor<R>{frame_->pgno(), cursor.offset, cursor.record};
     }
 
     // get the record whose key == @key
@@ -218,6 +222,7 @@ public:
         auto last = last_user_cursor();
         auto left = prev_cursor(last);
         auto right = next_cursor(last);
+
         auto &record = last.record;
         auto &right_record = right.record;
         auto &left_record = left.record;
@@ -237,9 +242,9 @@ public:
     tl::expected<R, ErrorCode> pop_front() {
         if (number_of_records() == 0)
             return tl::unexpected(ErrorCode::PopEmptyNode);
-        auto last = first_user_record();
+        auto last = first_user_cursor();
         auto left = prev_cursor(last);
-        auto right = right_cursor(last);
+        auto right = next_cursor(last);
         auto &record = last.record;
         auto &right_record = right.record;
         auto &left_record = left.record;
@@ -267,48 +272,39 @@ public:
 
 protected:
     template <typename V>
-    page_off_t insert_record_after(R &left_record, const Key &key,
+    NodeCursor insert_record_after(NodeCursor &left, const Key &key,
                                    const V &value) {
+        auto right = next_cursor(left);
+        R &right_record = right.record;
+        R &left_record = left.record;
 
-        page_off_t left_start = frame_->gpos() - left_record.len();
-
-        R right_record = left_record;
-        next_record(right_record);
-        page_off_t right_start = frame_->gpos() - right_record.len();
-
-        R record;
+        NodeCursor inserted{};
+        R &record = inserted.record;
         record.hdr = {
-            .order = left_record.hdr.order + 1,
+            // .order = left_record.hdr.order + 1,
         };
         record.key = key;
         record_value_assign(record, value);
 
         record.hdr.length = frame_->dump_at(frame_->last_inserted(), record);
 
-        auto record_end = frame_->ppos();
-        Log::GlobalLog() << "the end of the last dump: " << record_end
+        inserted.offset = frame_->ppos();
+        Log::GlobalLog() << "the end of the last dump: " << frame_->ppos()
                          << std::endl;
-        Log::GlobalLog() << "the start of the left record: " << left_start
-                         << std::endl;
-        Log::GlobalLog() << "the start of the right record: " << right_start
-                         << std::endl;
-        record.hdr.next_record_offset = right_start - record_end;
-        record.hdr.prev_record_offset = left_start - record_end;
-        left_record.hdr.next_record_offset =
-            (record_end - record.len()) - (left_start + left_record.len());
-        right_record.hdr.prev_record_offset =
-            (record_end - record.hdr.length) -
-            (right_start + right_record.hdr.length);
+        record.hdr.next_record_offset = offset(inserted, right);
+        record.hdr.prev_record_offset = offset(inserted, left);
+        left_record.hdr.next_record_offset = offset(left, inserted);
+        right_record.hdr.prev_record_offset = offset(right, inserted);
 
         // FIXME: cereal serialization determination.
-        frame_->dump_at(frame_->last_inserted(), record);
-        frame_->dump_at(left_start, left_record);
-        frame_->dump_at(right_start, right_record);
+        dump(inserted);
+        dump(left);
+        dump(right);
 
-        frame_->set_last_inserted(record_end);
+        frame_->set_last_inserted(inserted.offset);
         frame_->page()->hdr.number_of_records++;
 
-        return record_end;
+        return inserted;
     }
 
     template <typename V>
@@ -353,26 +349,19 @@ protected:
             return ErrorCode::NodeNotFull;
         {
             auto frame = node.frame_;
-            frame->page()->hdr.index = frame_->page()->hdr.index;
-            frame->page()->hdr.level = frame_->page()->hdr.level;
-            frame->page()->hdr.is_leaf = frame_->page()->hdr.is_leaf;
 
             int i = 0;
-            R record;
-            first_record(record);
-            while (i < n1) {
-                next_record(record);
-                i++;
-            }
-
-            i = 0;
             while (i < n2) {
-                node.insert_record(record);
-                next_record(record);
+                auto result = pop_back();
+                if (!result)
+                    return result.error();
+                auto &record = result.value();
+                node.insert_record(record.key, record.value);
                 i++;
             }
         }
         // record copy
+        return ErrorCode::Success;
     }
 
     void remove_record(R &record) {
@@ -428,21 +417,23 @@ protected:
     }
 
     void node_union(N &node) {
-        R record = node.first_user_record();
+        auto cursor = first_user_cursor();
         int i = 0;
         while (i < node.frame_->number_of_records()) {
+            auto &record = cursor.record;
             push_back(record.key, record.value);
+            i++;
         }
     }
 
     // record forward traverse in a node.
     void traverse(const TraverseFunc &func) {
-        R record = first_user_record();
+        auto cursor = first_user_cursor();
 
         int i = 0;
         while (i < frame_->number_of_records()) {
-            func(record);
-            next_record(record);
+            func(cursor.record);
+            cursor = next_cursor(cursor);
             i++;
         }
     }
@@ -450,60 +441,58 @@ protected:
     // record reverse traverse in a node.
     void traverse_r(const TraverseFunc &func) {
 
-        R record;
-        last_record(record);
-        prev_record(record);
+        auto cursor = last_user_cursor();
 
         int i = 0;
         while (i < frame_->number_of_records()) {
-            func(record);
-            prev_record(record);
+            func(cursor.record);
+            cursor = prev_cursor(cursor);
             i++;
         }
     }
 
 protected:
-    // retur Infimum record.
-    void first_record(R &record) { frame_->load_at(0, record); }
-    // return Supreme record.
-    void last_record(R &record) {
-        frame_->load_at(0, record);
-        frame_->load(record);
-    }
-    // NOTE: it is the caller's responsibility to ensure the node is not
-    // empty(no any user records).
-    R first_user_record() {
-        R record;
-        first_record(record);
-        next_record(record);
-        return record;
-    }
-
-    // make @record point to its prev record.
-    void prev_record(R &record) {
-        int offset = record.hdr.prev_record_offset;
-        frame_->load(offset, record);
-    }
-
-    R make_prev_record(R &record, page_off_t record_end) {
-        R result;
-        int offset = record.hdr.prev_record_offset;
-        frame_->load_at(record_end + offset, result);
-        return result;
-    }
-
-    // make @record point to its next record.
-    void next_record(R &record) {
-        int offset = record.hdr.next_record_offset;
-        frame_->load(offset, record);
-    }
-
-    R make_next_record(R &record, page_off_t record_end) {
-        R result;
-        int offset = record.hdr.next_record_offset;
-        frame_->load_at(record_end + offset, result);
-        return result;
-    }
+    // // retur Infimum record.
+    // void first_record(R &record) { frame_->load_at(0, record); }
+    // // return Supreme record.
+    // void last_record(R &record) {
+    //     frame_->load_at(0, record);
+    //     frame_->load(record);
+    // }
+    // // NOTE: it is the caller's responsibility to ensure the node is not
+    // // empty(no any user records).
+    // R first_user_record() {
+    //     R record;
+    //     first_record(record);
+    //     next_record(record);
+    //     return record;
+    // }
+    //
+    // // make @record point to its prev record.
+    // void prev_record(R &record) {
+    //     int offset = record.hdr.prev_record_offset;
+    //     frame_->load(offset, record);
+    // }
+    //
+    // R make_prev_record(R &record, page_off_t record_end) {
+    //     R result;
+    //     int offset = record.hdr.prev_record_offset;
+    //     frame_->load_at(record_end + offset, result);
+    //     return result;
+    // }
+    //
+    // // make @record point to its next record.
+    // void next_record(R &record) {
+    //     int offset = record.hdr.next_record_offset;
+    //     frame_->load(offset, record);
+    // }
+    //
+    // R make_next_record(R &record, page_off_t record_end) {
+    //     R result;
+    //     int offset = record.hdr.next_record_offset;
+    //     frame_->load_at(record_end + offset, result);
+    //     return result;
+    // }
 
     NodeCursor first_cursor() {
         R first;

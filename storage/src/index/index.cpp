@@ -91,7 +91,7 @@ ErrorCode Index::remove_record(const Key &key) {
 
     auto frame = leaf.value();
 
-    balance_for_delete(frame);
+    balance_for_delete<LeafIndexNode>(frame);
     LeafIndexNode node(frame, comp_);
 
     auto ec = node.remove_record(key);
@@ -129,6 +129,7 @@ tl::expected<Frame *, ErrorCode> Index::new_nonleaf_root(Frame *child) {
     return nullptr;
 }
 
+template <typename N>
 ErrorCode Index::balance_for_delete(Frame *frame) {
     if (frame->is_half_full()) {
         // case 1: ok to union the frame and one of its neighbor
@@ -146,33 +147,27 @@ ErrorCode Index::balance_for_delete(Frame *frame) {
                 return result.error();
             auto right_frame = result.value();
 
-            LeafIndexNode node(frame, comp_);
+            N node(frame, comp_);
             if (right_frame->number_of_records() >
                 // borrow from right sibling frame.
                 config::min_number_of_records()) {
 
-                LeafIndexNode right_node(right_frame, comp_);
-                LeafClusteredRecord to_move = right_node.first_user_record();
-                right_node.remove_record(to_move);
+                N right_node(right_frame, comp_);
+                auto borrowed = right_node.pop_front();
 
-                node.push_back(to_move.key, to_move.value);
-
-                auto cursor = right_frame->parent_record();
-                if (!cursor)
-                    return cursor.error();
-
-                cursor.value().record.key = right_node.first_user_record().key;
+                if (!borrowed)
+                    return borrowed.error();
+                node.push_back(borrowed.value().key, borrowed.value().value);
 
             } else if (left_frame->number_of_records() >
                        config::min_number_of_records()) {
                 // borrow fromt the left sibling frame.
-                LeafIndexNode left_node(left_frame, comp_);
-                auto result = left_node.pop_back();
-                if (!result)
-                    return result.error();
-                auto &to_move = result.value();
+                N left_node(left_frame, comp_);
+                auto borrowed = left_node.pop_back();
+                if (!borrowed)
+                    return borrowed.error();
+                auto &to_move = borrowed.value();
                 node.push_front(to_move.key, to_move.value);
-
             } else {
                 return ErrorCode::Failure;
             }
@@ -181,6 +176,7 @@ ErrorCode Index::balance_for_delete(Frame *frame) {
     return ErrorCode::Success;
 }
 
+// if necessary to do a union, do it and return true; else, return false.
 bool Index::sibling_union_check(Frame *frame) {
     if (!frame->is_half_full()) {
         return false;
@@ -199,11 +195,11 @@ bool Index::sibling_union_check(Frame *frame) {
 
     if (left_frame != nullptr &&
         left_frame->number_of_records() + frame->number_of_records() <=
-            LeafIndexNode::max_number_of_records()) {
+            config::max_number_of_records()) {
         union_frame(left_frame, frame);
     } else if (right_frame != nullptr &&
                right_frame->number_of_records() + frame->number_of_records() <=
-                   LeafIndexNode::max_number_of_records()) {
+                   config::max_number_of_records()) {
         union_frame(frame, right_frame);
     } else {
         return false;
@@ -227,18 +223,33 @@ void Index::union_frame(Frame *left_frame, Frame *right_frame) {
         return;
     right_parent = result.value();
 
-    InternalIndexNode right_parent_node(right_parent, comp_);
-    right_parent_node.remove_record(right_parent_cursor.value().record);
-
     if (left_frame->is_leaf()) {
         LeafIndexNode left_node(left_frame, comp_);
         LeafIndexNode right_node(right_frame, comp_);
 
         left_node.node_union(right_node);
-        pool_->remove_frame(right_parent);
+    } else {
+        InternalIndexNode left_node(left_frame, comp_);
+        InternalIndexNode right_node(right_frame, comp_);
+
+        left_node.node_union(right_node);
     }
 
-    sibling_union_check(right_parent);
+    left_frame->page()->hdr.next_page = right_frame->page()->hdr.next_page;
+    auto after_right = pool_->get_frame(right_frame->page()->hdr.next_page);
+    if (after_right) {
+        auto after_right_frame = after_right.value();
+        after_right_frame->page()->hdr.prev_page = left_frame->pgno();
+        after_right_frame->mark_dirty();
+    }
+
+    pool_->remove_frame(right_frame);
+    balance_for_delete<InternalIndexNode>(right_parent);
+
+    InternalIndexNode right_parent_node(right_parent, comp_);
+    IndexNode<InternalIndexNode, InternalClusteredRecord>::NodeCursor cursor{
+        right_parent_cursor.value().offset, right_parent_cursor.value().record};
+    right_parent_node.remove_record(cursor);
 }
 
 ErrorCode Index::balance_for_insert(Frame *frame) {
@@ -261,17 +272,20 @@ ErrorCode Index::balance_for_insert(Frame *frame) {
         Frame *parent_frame = result.value();
 
         InternalIndexNode newRootNode(parent_frame, comp_);
-        auto offset = newRootNode.insert_record(frame->key(), frame->pgno());
+        LeafIndexNode node(frame, comp_);
+        auto offset = newRootNode.insert_record(node.key(), frame->pgno());
         if (!offset)
             return offset.error();
 
         frame->set_parent(parent_frame->pgno(), offset.value());
+        meta_.depth++;
     }
     safe_node_split(frame, parent_frame);
 
     return ErrorCode::Success;
 }
 
+// recursively rebalance a internal index page.
 ErrorCode Index::rebalance_internal(Frame *frame) {
     Frame *parent_frame;
     if (frame != nullptr && frame->is_full()) {
@@ -302,6 +316,8 @@ ErrorCode Index::rebalance_internal(Frame *frame) {
     return ErrorCode::Success;
 }
 
+// the parent frame of @frame is ensured to have enough space to make child
+// split.
 ErrorCode Index::safe_node_split(Frame *frame, Frame *parent_frame) {
     int n1 = std::ceil(config::max_number_of_records() / 2);
     int n2 = std::floor(config::max_number_of_records() / 2);
@@ -310,16 +326,35 @@ ErrorCode Index::safe_node_split(Frame *frame, Frame *parent_frame) {
     if (!result)
         return result.error();
     Frame *new_frame = result.value();
+    new_frame->page()->hdr.next_page = frame->page()->hdr.next_page;
+    new_frame->page()->hdr.prev_page = frame->pgno();
+    frame->page()->hdr.next_page = new_frame->pgno();
 
     // TODO: memcpy from frame[record:n1, n1 + n2) to new_frame
+    if (frame->is_leaf()) {
+        LeafIndexNode left(frame, comp_);
+        LeafIndexNode right(new_frame, comp_);
+
+        auto ec = left.node_split(right, n1, n2);
+        if (ec != ErrorCode::Success)
+            return ec;
+    } else {
+        InternalIndexNode left(frame, comp_);
+        InternalIndexNode right(new_frame, comp_);
+
+        auto ec = left.node_split(right, n1, n2);
+        if (ec != ErrorCode::Success)
+            return ec;
+    }
 
     auto parent_cursor = frame->parent_record();
     if (!parent_cursor)
         return parent_cursor.error();
 
     InternalIndexNode node(parent_frame, comp_);
-    node.insert_record_after(parent_cursor.value().record, new_frame->key(),
-                             new_frame->pgno());
+    IndexNode<InternalIndexNode, InternalClusteredRecord>::NodeCursor cursor{
+        parent_cursor.value().offset, parent_cursor.value().record};
+    node.insert_record_after(cursor, new_frame->key(), new_frame->pgno());
 
     return ErrorCode::Success;
 }
@@ -359,9 +394,9 @@ void Index::traverse(const RecordTraverseFunc &func) {
     auto frame = result.value();
     while (!frame->is_leaf()) {
         InternalIndexNode node(frame, comp_);
-        auto first_record = node.first_user_record();
+        auto first_record = node.first_user_cursor();
 
-        auto child = pool_->get_frame(first_record.value);
+        auto child = pool_->get_frame(first_record.record.value);
         if (!child)
             return;
         frame = child.value();
@@ -380,9 +415,9 @@ void Index::traverse_r(const RecordTraverseFunc &func) {
     auto frame = result.value();
     while (!frame->is_leaf()) {
         InternalIndexNode node(frame, comp_);
-        auto first_record = node.first_user_record();
+        auto first_record = node.first_user_cursor();
 
-        auto child = pool_->get_frame(first_record.value);
+        auto child = pool_->get_frame(first_record.record.value);
         if (!child)
             return;
         frame = child.value();

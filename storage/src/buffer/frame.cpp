@@ -50,13 +50,7 @@ tl::expected<Frame *, ErrorCode> Frame::parent_frame() const {
     if (page()->hdr.parent_page == 0)
         return nullptr;
 
-    return pool_->get_frame(page()->hdr.parent_page)
-        .and_then([this](Frame *frame) -> tl::expected<Frame *, ErrorCode> {
-            return this->pool_->get_frame(frame->page()->hdr.parent_page);
-        })
-        .or_else([](auto error) -> tl::expected<Frame *, ErrorCode> {
-            return tl::unexpected(error);
-        });
+    return pool_->get_frame(page()->hdr.parent_page);
 }
 
 tl::expected<Cursor<InternalClusteredRecord>, ErrorCode>

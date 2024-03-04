@@ -114,6 +114,7 @@ private:
 
     tl::expected<Frame *, ErrorCode> search_leaf(const Key &key);
     // void rebalance(LeafIndexNode *node);
+    template <typename N>
     ErrorCode balance_for_delete(Frame *frame);
     ErrorCode balance_for_insert(Frame *frame);
     ErrorCode rebalance_internal(Frame *frame);

@@ -141,6 +141,9 @@ public:
     index_id_t index() const { return page()->hdr.index; }
     index_id_t level() const { return page()->hdr.level; }
     auto number_of_records() const { return page()->hdr.number_of_records; }
+    void set_number_of_records(uint16_t n) const {
+        page()->hdr.number_of_records = n;
+    }
 
     // the start of next inserted record.
     page_off_t last_inserted() const { return page()->hdr.last_inserted; }
