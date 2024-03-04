@@ -31,7 +31,7 @@ class Index {
 public:
 #ifdef DEBUG
 #endif // DEBUG
-    using RecordTraverseFunc = std::function<void(Key &, Column &)>;
+    using RecordTraverseFunc = std::function<void(LeafClusteredRecord &)>;
     template <typename N, typename R>
     using NodeTraverseFunc = std::function<void(IndexNode<N, R> *)>;
 
@@ -99,6 +99,9 @@ public:
     ErrorCode full_node_scan(NodeTraverseFunc<N, R> func);
     ErrorCode full_scan(RecordTraverseFunc func);
 
+    void traverse(const RecordTraverseFunc &func);
+    void traverse_r(const RecordTraverseFunc &func);
+
     int depth() const { return meta_.depth; }
 
     index_id_t id() const { return meta_.id; }
@@ -111,9 +114,12 @@ private:
 
     tl::expected<Frame *, ErrorCode> search_leaf(const Key &key);
     // void rebalance(LeafIndexNode *node);
-    ErrorCode rebalance_from_leaf(Frame *frame);
+    ErrorCode balance_for_delete(Frame *frame);
+    ErrorCode balance_for_insert(Frame *frame);
     ErrorCode rebalance_internal(Frame *frame);
     ErrorCode safe_node_split(Frame *frame, Frame *parent_frame);
+    bool sibling_union_check(Frame *frame);
+    void union_frame(Frame *, Frame *);
 
     // responsible to init a new frame. @child is only used when initing a
     // internal frame.

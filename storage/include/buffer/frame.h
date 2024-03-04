@@ -60,7 +60,7 @@ public:
 
     template <typename T>
     page_off_t load(T &value) {
-        Log::GlobalLog() << "going to load from " << gpos() << std::endl;
+        Log::GlobalLog() << "	going to load from " << gpos() << std::endl;
         page_off_t before = gpos();
         std::istream is(&membuf_);
         serialization::deserialize(is, value);
@@ -79,7 +79,7 @@ public:
 
     template <typename T>
     page_off_t dump(const T &value) {
-        Log::GlobalLog() << "going to dump at " << ppos() << std::endl;
+        Log::GlobalLog() << "	going to dump at " << ppos() << std::endl;
         page_off_t before = ppos();
         std::ostream os(&membuf_);
         serialization::serialize(os, value);
@@ -101,7 +101,7 @@ public:
     template <typename T>
     page_off_t load_at(page_off_t absolute, T &value) {
         membuf_.setg(absolute);
-        Log::GlobalLog() << "going to load from " << gpos() << std::endl;
+        Log::GlobalLog() << "	going to load from " << gpos() << std::endl;
         std::istream is(&membuf_);
         serialization::deserialize(is, value);
         return gpos() - absolute;
@@ -112,7 +112,7 @@ public:
     template <typename T>
     page_off_t dump_at(page_off_t absolute, const T &value) {
         membuf_.setp(absolute);
-        Log::GlobalLog() << "going to dump at " << ppos() << std::endl;
+        Log::GlobalLog() << "	going to dump at " << ppos() << std::endl;
         std::ostream os(&membuf_);
         serialization::serialize(os, value);
         mark_dirty();
@@ -140,6 +140,8 @@ public:
     page_id_t pgno() const { return page()->pgno(); }
     index_id_t index() const { return page()->hdr.index; }
     index_id_t level() const { return page()->hdr.level; }
+    auto number_of_records() const { return page()->hdr.number_of_records; }
+
     // the start of next inserted record.
     page_off_t last_inserted() const { return page()->hdr.last_inserted; }
     void set_last_inserted(page_off_t pos) {
@@ -156,8 +158,8 @@ public:
 
     BufferPoolManager *pool() const { return pool_; }
 
-    void set_parent_page(page_id_t parent);
-
+    tl::expected<Frame *, ErrorCode> prev_frame();
+    tl::expected<Frame *, ErrorCode> next_frame();
     void set_parent(page_id_t parent, page_off_t offset);
 
     // static tl::expected<Frame *, ErrorCode>

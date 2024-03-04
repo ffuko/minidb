@@ -36,10 +36,11 @@ TEST(BufferPoolTest, BasicTest) {
     // basic get/flush/remove
     {
         // write and flush
+        storage::Frame *frame;
         {
             auto result = pool.get_frame(pgno);
             ASSERT_EQ(true, result.has_value());
-            auto frame = result.value();
+            frame = result.value();
             ASSERT_EQ(1, frame->id());
             ASSERT_EQ(pgno, frame->page()->pgno());
 
@@ -54,7 +55,7 @@ TEST(BufferPoolTest, BasicTest) {
         }
         // remove
         {
-            auto ec = pool.remove_frame(pgno);
+            auto ec = pool.remove_frame(frame);
             ASSERT_EQ(ec, ErrorCode::Success) << std::format(
                 "failed to remove page {}: {}", pgno, handler.print_error(ec));
         }

@@ -48,7 +48,7 @@ public:
     tl::expected<Frame *, ErrorCode> allocate_frame();
 
     // dispose a page and set it free.
-    ErrorCode remove_frame(page_id_t pgno);
+    ErrorCode remove_frame(Frame *frame);
 
     // pin an in-use page so that it can't get page-out.
     ErrorCode pin_frame(page_id_t pgno);

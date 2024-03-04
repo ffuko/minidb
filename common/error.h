@@ -37,6 +37,7 @@ enum class ErrorCode : size_t {
 
     // node error
     NodeNotFull,
+    PopEmptyNode,
 };
 
 class ErrorHandler {

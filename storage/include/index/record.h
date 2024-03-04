@@ -14,6 +14,7 @@ namespace storage {
 // RecordHdr is the common header for all records.
 struct RecordHdr {
     // the order of the record in a index page.
+    // FIXME: not consistent, is necessary?
     int order = 0;
 
     // the status of a record, placeholder for now.
@@ -103,17 +104,17 @@ struct LeafClusteredRecord {
 struct InternalClusteredRecord {
     RecordHdr hdr;
     Key key;
-    page_id_t child;
+    page_id_t value;
 
     // register
     template <class Archive>
     void serialize(Archive &archive) {
-        archive(hdr, key, child);
+        archive(hdr, key, value);
     }
 
     InternalClusteredRecord() {}
     InternalClusteredRecord(const Key &key, page_id_t child)
-        : hdr(), key(key), child(child) {}
+        : hdr(), key(key), value(child) {}
 
     uint16_t len() const { return hdr.length; }
     // friend std::ostream &operator<<(std::ostream &os,

@@ -79,15 +79,18 @@ Frame::parent_record() const {
             });
 }
 
-void Frame::set_parent_page(page_id_t parent) {
-    page()->hdr.parent_page = parent;
-    mark_dirty();
-}
-
 void Frame::set_parent(page_id_t parent, page_off_t offset) {
     page()->hdr.parent_page = parent;
     page()->hdr.parent_record_off = offset;
     mark_dirty();
+}
+
+tl::expected<Frame *, ErrorCode> Frame::prev_frame() {
+    return pool_->get_frame(page()->hdr.prev_page);
+}
+
+tl::expected<Frame *, ErrorCode> Frame::next_frame() {
+    return pool_->get_frame(page()->hdr.next_page);
 }
 
 // tl::expected<Frame *, ErrorCode>

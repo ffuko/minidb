@@ -7,10 +7,10 @@
 // FIXME: placeholder
 namespace config {
 // record spec;
-
 static constexpr storage::page_off_t INFI_SUPRE_LEN = 100;
 static constexpr storage::page_off_t LEAF_CLUSTER_RECORD_LEN = 100;
 static constexpr storage::page_off_t INTERNAL_CLUSTER_RECORD_LEN = 100;
+enum class RecordStatus : uint8_t { Deleted };
 
 // common pages spec
 static constexpr storage::page_off_t PAGE_SIZE = 1024;

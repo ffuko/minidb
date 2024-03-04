@@ -5,6 +5,10 @@
 #include <vector>
 
 using namespace storage;
+#define print_line                                                             \
+    std::cout << "-----------------------------------------------------------" \
+              << std::endl
+
 TEST(IndexTest, BasicInsertTest) {
     KeyMeta key_meta = {"id", storage::key_t(KeyType::Int)};
     FieldMeta field_meta = {"score", storage::key_t(KeyType::Int)};
@@ -26,5 +30,29 @@ TEST(IndexTest, BasicInsertTest) {
             << "cannot find record because of "
             << ErrorHandler::print_error(result.error());
         ASSERT_EQ(row.second, result.value().value);
+    }
+
+    print_line;
+
+    std::function<void(storage::LeafClusteredRecord &)> print =
+        [](storage::LeafClusteredRecord &record) {
+            std::cerr << record.key << ": " << record.value << std::endl;
+        };
+
+    index->traverse(print);
+
+    print_line;
+
+    index->traverse_r(print);
+
+    print_line;
+
+    for (auto &row : input) {
+        auto ec = index->remove_record(row.first);
+        ASSERT_EQ(ErrorCode::Success, ec)
+            << "error is " << ErrorHandler().print_error(ec);
+
+        auto result = index->search_record(row.first);
+        ASSERT_EQ(false, result.has_value());
     }
 }

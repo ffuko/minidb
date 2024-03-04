@@ -33,17 +33,13 @@ tl::expected<Frame *, ErrorCode> BufferPoolManager::allocate_frame() {
     return tl::unexpected(frame.error());
 }
 
-ErrorCode BufferPoolManager::remove_frame(page_id_t pgno) {
-    Frame *frame;
-    auto ec = cache_.get(pgno, frame);
-    if (ec != ErrorCode::Success)
-        return ErrorCode::DeletedPageNotExist;
+ErrorCode BufferPoolManager::remove_frame(Frame *frame) {
     free_list_.insert(free_list_.end(), frame->id());
-    ec = cache_.remove(pgno);
+    auto ec = cache_.remove(frame->pgno());
     if (ec != ErrorCode::Success)
         return ec;
 
-    ec = disk_manager_->set_page_free(pgno);
+    ec = disk_manager_->set_page_free(frame->pgno());
     if (ec != ErrorCode::Success)
         return ec;
 
