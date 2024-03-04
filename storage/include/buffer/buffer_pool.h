@@ -4,10 +4,12 @@
 #include "buffer/frame.h"
 #include "buffer/lru_cache.h"
 #include "error.h"
+#include "log.h"
 #include "noncopyable.h"
 #include "tl/expected.hpp"
 #include "types.h"
 #include <cstddef>
+#include <format>
 #include <functional>
 #include <list>
 // #include <memory>
@@ -21,9 +23,10 @@ public:
     using TraverseFunc = std::function<ErrorCode(Frame *)>;
 
 public:
-    BufferPoolManager(size_t pool_size, DiskManager *disk_manager)
+    BufferPoolManager(size_t pool_size,
+                      std::shared_ptr<DiskManager> disk_manager)
         : pool_size_(pool_size), pool_(), cache_(pool_size),
-          disk_manager_(disk_manager) {
+          disk_manager_(std::move(disk_manager)) {
         pool_.reserve(pool_size_);
         for (size_t i = 0; i < pool_size_; i++) {
             pool_.push_back(Frame(this, i));
@@ -33,28 +36,27 @@ public:
     }
 
     ~BufferPoolManager() { // page_table_.clear();
-        // NOTE: not clearing a list will lead to segmentation fault.
         free_list_.clear();
     }
 
     // get an existing page from the disk file and put into the buffer.
-    tl::expected<Frame *, ErrorCode> get_page(page_id_t pgno);
+    tl::expected<Frame *, ErrorCode> get_frame(page_id_t pgno);
 
     // create a new page in the file and put it into the buffer.
     // if the file has free pages, pick and use one; else, extends  the file.
-    // NOTE: new page's payload field is nullptr
-    tl::expected<Frame *, ErrorCode> allocate_page();
+    // every new page allocated is marked dirty.
+    tl::expected<Frame *, ErrorCode> allocate_frame();
 
     // dispose a page and set it free.
-    ErrorCode remove_page(page_id_t pgno);
+    ErrorCode remove_frame(page_id_t pgno);
 
     // pin an in-use page so that it can't get page-out.
-    ErrorCode pin_page(page_id_t pgno);
+    ErrorCode pin_frame(page_id_t pgno);
     // unpin an in-use page so that it can get page-out.
-    ErrorCode unpin_page(page_id_t pgno);
+    ErrorCode unpin_frame(page_id_t pgno);
 
     // flush the dirty page, if not dirty, do nothing.
-    ErrorCode flush_page(page_id_t pgno);
+    ErrorCode flush_frame(Frame *frame);
 
     // flush all dirty pages.
     ErrorCode flush_all();
@@ -89,10 +91,19 @@ private:
         frame->reassign(page);
 
         ErrorCode ec = cache_.put(page->pgno(), frame);
-        if (ec == ErrorCode::Success)
+        if (ec == ErrorCode::Success) {
+            Log::GlobalLog()
+                << std::format(
+                       "[BufferPoolManager]: get a free frame {} for page {}",
+                       frame->id(), frame->pgno())
+                << std::endl;
             return frame;
-        else
+        } else {
+            Log::GlobalLog()
+                << std::format("[BufferPoolManager]: failed get a free frame")
+                << std::endl;
             return tl::unexpected(ec);
+        }
     }
 
     using PageTable = std::unordered_map<page_id_t, frame_id_t>;
@@ -104,7 +115,7 @@ private:
     FrameLRUCache cache_;
     // PageTable page_table_;
 
-    DiskManager *disk_manager_;
+    std::shared_ptr<DiskManager> disk_manager_;
 
     // available frame_id_t
     std::list<frame_id_t> free_list_;

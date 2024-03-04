@@ -13,8 +13,7 @@
 namespace storage {
 // PageHdr is a common header for all type of pages.
 struct PageHdr {
-    // uint16_t number_of_heap_records;
-
+    index_id_t index;
     // the number of the page
     page_id_t pgno;
 
@@ -22,35 +21,48 @@ struct PageHdr {
     uint16_t number_of_records;
     uint16_t last_inserted;
 
+    // sibiling index pages in the same level.
+    page_id_t prev_page;
+    page_id_t next_page;
+
     // the level of this index page in the index.
     // serves also as an indicator whether the page is a leaf or not.
     // FIXME: invalid and inconsistant for now
     uint8_t level;
-
-    // FIXME: use page type instead.
+    // TODO: use page type instead.
     bool is_leaf;
-
-    PageHdr(int level, bool is_leaf)
-        : level(level), number_of_records(0), is_leaf(is_leaf) {}
+    page_id_t parent_page;
+    page_off_t parent_record_off;
 
     // default construction for later deserizaliztion.
     PageHdr(page_id_t pgno)
-        : pgno(pgno), level(0), number_of_records(0), is_leaf(false) {}
+        : index(0), pgno(pgno), number_of_records(0),
+          last_inserted(config::INDEX_PAGE_FIRST_RECORD_OFFSET), prev_page(0),
+          next_page(0), level(0), is_leaf(false), parent_page(0),
+          parent_record_off(0) {}
+
+    template <class Archive>
+    void serialize(Archive &archive) {
+        archive(pgno, number_of_records, last_inserted, prev_page, next_page,
+                level, is_leaf, parent_page, parent_record_off);
+    }
 };
 
 // Page is the in-disk representation of a record page.
+// FIXME: use a memory pool for payload field.
 struct Page {
     PageHdr hdr;
-    // payload stores all the records of a page.
+    // payload stores all the records of a page; size: number_of_records *
+    // RECORD_LEN
     char *payload;
 
     // for deserizalize
-    explicit Page(const char *raw) : hdr(0), payload(nullptr) {
+    explicit Page(const char *raw) : hdr(0), payload(new char[payload_len()]) {
         deserizalize(raw);
     }
 
-    explicit Page(page_id_t pgno) : hdr(pgno) {}
-    Page(int level, bool is_leaf) : hdr(level, is_leaf), payload(nullptr) {}
+    explicit Page(page_id_t pgno)
+        : hdr(pgno), payload(new char[payload_len()]) {}
 
     ~Page() {
         if (payload != nullptr)
@@ -60,43 +72,26 @@ struct Page {
 
     page_id_t pgno() const { return hdr.pgno; }
 
+    // return the length of the payload(all records).
+    static constexpr page_off_t payload_len() {
+        return config::PAGE_SIZE - sizeof(PageHdr);
+    }
+
     // FIXME: const leads to relocation linking error?
     static size_t HdrOffset;
+    static size_t PayloadOffset;
 
     // deserizalize a page-size byte stream to struct Page.
     // NOTE: ensure @param data is as large as a page-size.
-    void deserizalize(const char *data) {
-        ::memcpy(this + HdrOffset, data, sizeof(PageHdr));
-        size_t payload_len = 0;
-        // TODO: only for clusterd index for now; secondary index cases?
-        if (hdr.is_leaf) {
-            payload_len =
-                config::LEAF_CLUSTER_RECORD_LEN * hdr.number_of_records;
-        } else {
-            payload_len =
-                config::INTERNAL_CLUSTER_RECORD_LEN * hdr.number_of_records;
-        }
-        payload = new char[payload_len];
-        ::memcpy(payload, data + offsetof(Page, payload), payload_len);
-    }
+    void deserizalize(const char *data);
 
     // @return a shared_ptr to a page-size char block
-    tl::expected<std::shared_ptr<char>, ErrorCode> serialize() const {
-        std::shared_ptr<char> raw =
-            std::shared_ptr<char>(new char[config::PAGE_SIZE]{0});
-        ::memcpy(raw.get(), this + HdrOffset, sizeof(PageHdr));
-        if (!payload)
-            return tl::unexpected(ErrorCode::InvalidPagePayload);
-        if (hdr.is_leaf) {
-            ::memcpy(raw.get() + offsetof(Page, payload), payload,
-                     config::LEAF_CLUSTER_RECORD_LEN * hdr.number_of_records);
-        } else {
-            ::memcpy(raw.get() + offsetof(Page, payload), payload,
-                     config::INTERNAL_CLUSTER_RECORD_LEN *
-                         hdr.number_of_records);
-        }
-        return raw;
-    }
+    tl::expected<std::shared_ptr<char>, ErrorCode> serialize() const;
+
+    // template<class Archive>
+    // void serialize(Archive &archive) {
+    //     archive(hdr, ;)
+    // }
 };
 
 } // namespace storage

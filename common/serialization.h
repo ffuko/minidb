@@ -1,24 +1,42 @@
 #ifndef COMMON_SERILIZATION_H
 #define COMMON_SERILIZATION_H
 
+#include "error.h"
 #include "indexer.h"
 #include <cereal/archives/binary.hpp>
-#include <index/record.h>
 #include <iostream>
 #include <istream>
 #include <ostream>
 #include <variant>
+#include <vector>
 
 namespace storage {
 
 template <typename T, typename... Ts>
 std::ostream &operator<<(std::ostream &os, const std::variant<T, Ts...> &v) {
-    os << v.index();
+
+    os << "[" << v.index() << "] ";
 
     std::visit([&os](auto &&arg) { os << arg; }, v);
     return os;
 }
 
+template <typename T, typename... Ts>
+std::ostream &operator<<(std::ostream &os,
+                         const std::vector<std::variant<T, Ts...>> &vs) {
+    os << "{ ";
+    for (auto v : vs) {
+        os << v;
+    }
+    os << "}";
+    return os;
+}
+
+// print error
+inline std::ostream &operator<<(std::ostream &os, ErrorCode ec) {
+    os << ErrorHandler::print_error(ec);
+    return os;
+}
 // FIXME: unexpected behaviours
 // template <typename T, typename... Ts>
 // std::istream &operator>>(std::istream &is, std::variant<T, Ts...> &v) {

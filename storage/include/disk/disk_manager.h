@@ -5,6 +5,7 @@
 #include "config.h"
 #include "disk/page.h"
 #include "error.h"
+#include "log.h"
 #include "scope_guard.h"
 #include "tl/expected.hpp"
 #include "types.h"
@@ -130,8 +131,11 @@ public:
 
     ErrorCode write_page(std::shared_ptr<Page> page) {
         auto result = page->serialize();
-        if (!result)
+        if (!result) {
+            Log::GlobalLog() << "[DiskManager]: failed to serialize page "
+                             << page->pgno() << std::endl;
             return result.error();
+        }
 
         page_id_t pgno = page->pgno();
         std::shared_ptr<char> raw = result.value();
@@ -143,11 +147,15 @@ public:
         db_io_.write(raw.get(), config::PAGE_SIZE);
         // check for I/O error
         if (db_io_.bad()) {
+            Log::GlobalLog() << "[DiskManager]: failed to write page "
+                             << page->pgno() << std::endl;
             return ErrorCode::DiskWriteError;
         }
 
         // flush to keep disk file in sync
         db_io_.flush();
+        Log::GlobalLog() << "[DiskManager]: succeed to write page "
+                         << page->pgno() << std::endl;
         return ErrorCode::Success;
     }
 
@@ -167,7 +175,8 @@ public:
         if (free_page < file_header_.page_count) {
             file_header_.free_array.set(free_page, false);
             update_file_header();
-            std::cout << "found free page " << free_page << std::endl;
+            Log::GlobalLog()
+                << "[DiskManager]: found free page " << free_page << std::endl;
             return read_page(free_page);
         }
 
@@ -180,8 +189,9 @@ public:
         std::shared_ptr<Page> page =
             std::make_shared<Page>(file_header_.page_count);
 
-        std::cout << std::format("allocate new page {}", page->pgno())
-                  << std::endl;
+        Log::GlobalLog() << std::format("[DiskManager]: allocate new page {}",
+                                        page->pgno())
+                         << std::endl;
 
         file_header_.free_array.set(file_header_.page_count, false);
         file_header_.page_count++;
@@ -217,14 +227,19 @@ private:
 
         db_io_.seekg(0);
         auto raw = file_header_.serialize();
-        db_io_.write(raw.get(), config::PAGE_SIZE);
+        db_io_.write(raw.get(), sizeof(DBFileHeader));
         // check for I/O error
         if (db_io_.bad()) {
+            Log::GlobalLog()
+                << "[DiskManager]: failed to update the file header"
+                << std::endl;
             return ErrorCode::DiskWriteError;
         }
 
         // flush to keep disk file in sync
         db_io_.flush();
+        Log::GlobalLog() << "[DiskManager]: update the index's file header"
+                         << std::endl;
         return ErrorCode::Success;
     }
 

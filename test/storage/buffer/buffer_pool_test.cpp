@@ -4,29 +4,30 @@
 #include "types.h"
 #include "gtest/gtest.h"
 #include <gtest/gtest.h>
+#include <memory>
 
 TEST(BufferPoolTest, BasicTest) {
     ErrorHandler handler;
 
-    storage::DiskManager disk("test.db");
-    storage::BufferPoolManager pool(10, &disk);
+    auto disk = std::make_shared<storage::DiskManager>("test.db");
+    storage::BufferPoolManager pool(10, disk);
     // basic alloc
     storage::page_id_t pgno;
     {
-        auto result = pool.allocate_page();
+        auto result = pool.allocate_frame();
         ASSERT_EQ(true, result.has_value());
         auto frame = result.value();
         ASSERT_EQ(0, frame->id());
     }
     {
-        auto result = pool.allocate_page();
+        auto result = pool.allocate_frame();
         ASSERT_EQ(true, result.has_value());
         auto frame = result.value();
         ASSERT_EQ(1, frame->id());
         pgno = frame->page()->pgno();
     }
     {
-        auto result = pool.allocate_page();
+        auto result = pool.allocate_frame();
         ASSERT_EQ(true, result.has_value());
         auto frame = result.value();
         ASSERT_EQ(2, frame->id());
@@ -36,7 +37,7 @@ TEST(BufferPoolTest, BasicTest) {
     {
         // write and flush
         {
-            auto result = pool.get_page(pgno);
+            auto result = pool.get_frame(pgno);
             ASSERT_EQ(true, result.has_value());
             auto frame = result.value();
             ASSERT_EQ(1, frame->id());
@@ -48,18 +49,18 @@ TEST(BufferPoolTest, BasicTest) {
             frame->page()->payload =
                 new char[config::LEAF_CLUSTER_RECORD_LEN]{'1', '2', 0};
             frame->mark_dirty();
-            auto ec = pool.flush_page(pgno);
+            auto ec = pool.flush_frame(frame);
             ASSERT_EQ(ErrorCode::Success, ec);
         }
         // remove
         {
-            auto ec = pool.remove_page(pgno);
+            auto ec = pool.remove_frame(pgno);
             ASSERT_EQ(ec, ErrorCode::Success) << std::format(
                 "failed to remove page {}: {}", pgno, handler.print_error(ec));
         }
         // get again
         {
-            auto result = pool.get_page(pgno);
+            auto result = pool.get_frame(pgno);
             ASSERT_EQ(true, result.has_value());
             auto frame = result.value();
             ASSERT_EQ(pgno, frame->page()->pgno());
@@ -68,4 +69,5 @@ TEST(BufferPoolTest, BasicTest) {
             ASSERT_EQ('2', frame->page()->payload[1]);
         }
     }
+    std::filesystem::remove("test.db");
 }

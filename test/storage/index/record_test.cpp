@@ -15,10 +15,8 @@ TEST(RecordTest, SerializationTest) {
     // record header
     {
         fs.seekg(0);
-        auto expected = RecordHdr{.type = record_t(RecordType::Internal),
-                                  .order = 1,
-                                  .status = 2,
-                                  .next_record_offset = 345};
+        auto expected =
+            RecordHdr{.order = 1, .status = 2, .next_record_offset = 345};
 
         // operator <</>> overload
         // fs << expected;
@@ -42,14 +40,13 @@ TEST(RecordTest, SerializationTest) {
     }
     // internal record
     {
-        storage::InternalClusteredRecord expected;
-        expected = {
-            .hdr = {.type = record_t(RecordType::Internal),
-                    .order = 1,
-                    .status = 0,
-                    .next_record_offset = 100},
-            .key = 33,
+        storage::InternalClusteredRecord expected{
+            33,
+            1,
         };
+        expected.hdr =
+            RecordHdr{.order = 1, .status = 0, .next_record_offset = 100};
+
         storage::InternalClusteredRecord compared;
         // cereal
         {
@@ -89,14 +86,13 @@ TEST(RecordTest, SerializationTest) {
     }
     // leaf record
     {
-        storage::LeafClusteredRecord expected{
-            {.type = record_t(RecordType::Internal),
-             .order = 1,
-             .status = 0,
-             .next_record_offset = 100},
-            2,
+        storage::LeafClusteredRecord expected;
+        expected.hdr = {.order = 1, .status = 0, .next_record_offset = 100};
+        expected.key = 2;
+        expected.value = {
             "test",
         };
+
         storage::LeafClusteredRecord compared;
 
         fs.seekg(0);

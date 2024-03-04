@@ -5,14 +5,17 @@
 #include <vector>
 
 enum class ErrorCode : size_t {
-    Success,
+    Success = 0,
     Failure,
     KeyNotFound,
     NodeNotFound,
     KeyAlreadyExist,
 
+    // index error.
+    InvalidKeyType,
     KeyNotPinned,
     KeyAlreadyPinned,
+    InvalidInsertPos,
 
     DiskWriteError,
     DiskReadError,
@@ -30,7 +33,10 @@ enum class ErrorCode : size_t {
 
     // pool error
     PoolNoFreeFrame,
-    DeletedPageNotExist
+    DeletedPageNotExist,
+
+    // node error
+    NodeNotFull,
 };
 
 class ErrorHandler {
@@ -38,28 +44,31 @@ public:
     ErrorHandler() = default;
     ~ErrorHandler() = default;
 
-    std::string print_error(ErrorCode ec) {
+    static std::string print_error(ErrorCode ec) {
         return messages[static_cast<size_t>(ec)];
     }
 
 private:
-    std::vector<std::string> messages = {
-        "Success", "Failure", "KeyNotFound", "NodeNotFound", "KeyAlreadyExist",
+    // FIXME: update
+    static const inline std::vector<std::string> messages =
+        std::vector<std::string>{"Success", "Failure", "KeyNotFound",
+                                 "NodeNotFound", "KeyAlreadyExist",
 
-        "KeyNotPinned", "KeyAlreadyPinned",
+                                 "KeyNotPinned", "KeyAlreadyPinned",
 
-        "DiskWriteError", "DiskReadError", "DiskReadOverflow",
+                                 "DiskWriteError", "DiskReadError",
+                                 "DiskReadOverflow",
 
-        "FrameNotPinned",
+                                 "FrameNotPinned",
 
-        // cache error
-        "CacheNoMoreVictim", "CacheEntryNotFound",
+                                 // cache error
+                                 "CacheNoMoreVictim", "CacheEntryNotFound",
 
-        // page related
-        "InvalidPageNum", "InvalidPagePayload",
+                                 // page related
+                                 "InvalidPageNum", "InvalidPagePayload",
 
-        // pool error
-        "PoolNoFreeFrame", "DeletedPageNotExist"};
+                                 // pool error
+                                 "PoolNoFreeFrame", "DeletedPageNotExist"};
 };
 
 // class MyException : public std::runtime_error {
