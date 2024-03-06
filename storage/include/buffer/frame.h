@@ -41,26 +41,27 @@ public:
         R supre{};
         supre.hdr.order = -1;
         infi.hdr.length = dump_at(0, infi);
+
         supre.hdr.length = dump(supre);
 
         infi.hdr.next_record_offset = 0;
         supre.hdr.prev_record_offset = -supre.hdr.length - infi.hdr.length;
-        Log::GlobalLog() << "infi: " << infi.hdr.length << std::endl;
-        Log::GlobalLog() << "supre: " << supre.hdr.length << std::endl;
+        // Log::GlobalLog() << "infi: " << infi.hdr.length << std::endl;
+        // Log::GlobalLog() << "supre: " << supre.hdr.length << std::endl;
 
         // FIXME: serialization determination for infi and supre.
         dump_at(0, infi);
         dump(supre);
         set_last_inserted(ppos());
 
-        Log::GlobalLog()
-            << "[Frame]: dump infimum and supremum in the new frame"
-            << std::endl;
+        // Log::GlobalLog()
+        // << "[Frame]: dump infimum and supremum in the new frame" <<
+        // std::endl;
     }
 
     template <typename T>
     page_off_t load(T &value) {
-        Log::GlobalLog() << "	going to load from " << gpos() << std::endl;
+        // Log::GlobalLog() << "	going to load from " << gpos() << std::endl;
         page_off_t before = gpos();
         std::istream is(&membuf_);
         serialization::deserialize(is, value);
@@ -79,7 +80,7 @@ public:
 
     template <typename T>
     page_off_t dump(const T &value) {
-        Log::GlobalLog() << "	going to dump at " << ppos() << std::endl;
+        // Log::GlobalLog() << "	going to dump at " << ppos() << std::endl;
         page_off_t before = ppos();
         std::ostream os(&membuf_);
         serialization::serialize(os, value);
@@ -101,7 +102,7 @@ public:
     template <typename T>
     page_off_t load_at(page_off_t absolute, T &value) {
         membuf_.setg(absolute);
-        Log::GlobalLog() << "	going to load from " << gpos() << std::endl;
+        // Log::GlobalLog() << "	going to load from " << gpos() << std::endl;
         std::istream is(&membuf_);
         serialization::deserialize(is, value);
         return gpos() - absolute;
@@ -112,7 +113,7 @@ public:
     template <typename T>
     page_off_t dump_at(page_off_t absolute, const T &value) {
         membuf_.setp(absolute);
-        Log::GlobalLog() << "	going to dump at " << ppos() << std::endl;
+        // Log::GlobalLog() << "	going to dump at " << ppos() << std::endl;
         std::ostream os(&membuf_);
         serialization::serialize(os, value);
         mark_dirty();
@@ -129,17 +130,17 @@ public:
     bool is_dirty() { return dirty_; }
 
     bool is_full() const {
-        return page()->hdr.number_of_records >= config::max_number_of_childs();
+        return page()->hdr.number_of_records >= config::max_number_of_records();
     }
 
     bool is_half_full() const {
-        return page()->hdr.number_of_records == config::min_number_of_childs();
+        return page()->hdr.number_of_records <= config::min_number_of_records();
     }
 
     std::shared_ptr<Page> page() const { return page_; }
     page_id_t pgno() const { return page()->pgno(); }
     index_id_t index() const { return page()->hdr.index; }
-    index_id_t level() const { return page()->hdr.level; }
+    uint8_t level() const { return page()->hdr.level; }
     auto number_of_records() const { return page()->hdr.number_of_records; }
     void set_number_of_records(uint16_t n) const {
         page()->hdr.number_of_records = n;
@@ -151,8 +152,6 @@ public:
         page()->hdr.last_inserted = pos;
         mark_dirty();
     }
-
-    Key key();
 
     tl::expected<Frame *, ErrorCode> parent_frame() const;
 
@@ -175,6 +174,7 @@ private:
     std::shared_ptr<Page> page_;
 
     // make page payload field a membuf so that it's easier to do serialization.
+    // NOTE: max_size = Page size - PageHdr size.
     common::MemBuf membuf_;
     bool dirty_;
 };

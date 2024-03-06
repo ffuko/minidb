@@ -20,6 +20,7 @@ enum class ErrorCode : size_t {
     DiskWriteError,
     DiskReadError,
     DiskReadOverflow,
+    DiskWriteOverflow,
 
     FrameNotPinned,
 
@@ -30,14 +31,18 @@ enum class ErrorCode : size_t {
     // page related
     InvalidPageNum,
     InvalidPagePayload,
+    GetRootPage,
 
     // pool error
     PoolNoFreeFrame,
     DeletedPageNotExist,
+    GetRootParent,
 
     // node error
     NodeNotFull,
     PopEmptyNode,
+
+    UnknownException,
 };
 
 class ErrorHandler {
@@ -52,24 +57,26 @@ public:
 private:
     // FIXME: update
     static const inline std::vector<std::string> messages =
-        std::vector<std::string>{"Success", "Failure", "KeyNotFound",
-                                 "NodeNotFound", "KeyAlreadyExist",
+        std::vector<std::string>{
+            "Success", "Failure", "KeyNotFound", "NodeNotFound",
+            "KeyAlreadyExist", "InvalidKeyType",
 
-                                 "KeyNotPinned", "KeyAlreadyPinned",
+            "KeyNotPinned", "KeyAlreadyPinned", "InvalidInsertPos",
 
-                                 "DiskWriteError", "DiskReadError",
-                                 "DiskReadOverflow",
+            "DiskWriteError", "DiskReadError", "DiskReadOverflow",
+            "DiskWriteOverflow",
 
-                                 "FrameNotPinned",
+            "FrameNotPinned",
 
-                                 // cache error
-                                 "CacheNoMoreVictim", "CacheEntryNotFound",
+            // cache error
+            "CacheNoMoreVictim", "CacheEntryNotFound",
 
-                                 // page related
-                                 "InvalidPageNum", "InvalidPagePayload",
+            // page related
+            "InvalidPageNum", "InvalidPagePayload", "GetRootPage",
 
-                                 // pool error
-                                 "PoolNoFreeFrame", "DeletedPageNotExist"};
+            // pool error
+            "PoolNoFreeFrame", "DeletedPageNotExist", "GetRootParent",
+            "NodeNotFull", "PopEmptyNode", "UnknownException"};
 };
 
 // class MyException : public std::runtime_error {

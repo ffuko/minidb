@@ -6,6 +6,7 @@
 #include "config.h"
 #include "error.h"
 #include "index/cursor.h"
+#include "log.h"
 #include "noncopyable.h"
 #include "record.h"
 #include "types.h"
@@ -45,7 +46,7 @@ public:
         R record;
     };
 
-    using TraverseFunc = std::function<void(R &record)>;
+    using TraverseFunc = std::function<void(LeafClusteredRecord &record)>;
 
     static constexpr int max_number_of_records() {
         return config::MAX_NUMBER_OF_RECORDS_PER_PAGE;
@@ -95,7 +96,7 @@ public:
     }
 
     // search for the left sibling or the desired key, whose is <= desired
-    // record.
+    // record, or the first user record.
     // FIXME: use binary search?
     tl::expected<Cursor<R>, ErrorCode> get_cursor(const Key &key) {
         auto cursor = first_user_cursor();
@@ -114,6 +115,11 @@ public:
             cursor = next_cursor(cursor);
             i++;
         }
+        // Log::GlobalLog() << i << std::endl;
+
+        // return the first user record.
+        if (i == 0)
+            return Cursor<R>{frame_->pgno(), cursor.offset, cursor.record};
 
         cursor = prev_cursor(cursor);
         return Cursor<R>{frame_->pgno(), cursor.offset, cursor.record};
@@ -145,7 +151,7 @@ public:
     }
 
     template <typename V>
-    tl::expected<page_off_t, ErrorCode> insert_record(const Key &key,
+    tl::expected<NodeCursor, ErrorCode> insert_record(const Key &key,
                                                       const V &value) {
         R record;
         // NOTE: first record of an internal index page is always the minimal
@@ -168,9 +174,9 @@ public:
         }
 
         auto result = insert_record_before(cursor, key, value);
-        Log::GlobalLog() << "the number of records after insert: "
-                         << frame_->number_of_records() << std::endl;
-        return result.offset;
+        // Log::GlobalLog() << "the number of records after insert: "
+        //  << frame_->number_of_records() << std::endl;
+        return result;
     }
 
     tl::expected<NodeCursor, ErrorCode> remove_record(const Key &key) {
@@ -187,8 +193,8 @@ public:
                 return tl::unexpected(ErrorCode::InvalidKeyType);
             else if (record.key == key) {
                 auto result = remove_record(cursor);
-                Log::GlobalLog() << "the number of records after remove: "
-                                 << frame_->number_of_records() << std::endl;
+                // Log::GlobalLog() << "the number of records after remove: "
+                //<< frame_->number_of_records() << std::endl;
 
                 return result;
             } else if (record.key > key)
@@ -202,18 +208,18 @@ public:
     }
 
     template <typename V>
-    page_off_t push_back(const Key &key, const V &value) {
+    NodeCursor push_back(const Key &key, const V &value) {
         auto supre = last_cursor();
         auto result = insert_record_before(supre, key, value);
-        return result.offset;
+        return result;
     }
 
     template <typename V>
-    page_off_t push_front(const Key &key, const V &value) {
+    NodeCursor push_front(const Key &key, const V &value) {
         auto first = first_user_cursor();
 
         auto result = insert_record_before(first, key, value);
-        return result.offset;
+        return result;
     }
 
     tl::expected<R, ErrorCode> pop_back() {
@@ -228,7 +234,8 @@ public:
         auto &left_record = left.record;
 
         left_record.hdr.next_record_offset = offset(left, right);
-        right_record.hdr.next_record_offset = offset(right, left);
+        right_record.hdr.prev_record_offset = offset(right, left);
+        // FIXME: lazy delete;
         record.hdr.status = uint8_t(config::RecordStatus::Deleted);
 
         dump(last);
@@ -278,7 +285,7 @@ protected:
         R &right_record = right.record;
         R &left_record = left.record;
 
-        NodeCursor inserted{};
+        NodeCursor inserted{0, R{}};
         R &record = inserted.record;
         record.hdr = {
             // .order = left_record.hdr.order + 1,
@@ -289,8 +296,8 @@ protected:
         record.hdr.length = frame_->dump_at(frame_->last_inserted(), record);
 
         inserted.offset = frame_->ppos();
-        Log::GlobalLog() << "the end of the last dump: " << frame_->ppos()
-                         << std::endl;
+        // Log::GlobalLog() << "the end of the last dump: " << frame_->ppos()
+        // << std::endl;
         record.hdr.next_record_offset = offset(inserted, right);
         record.hdr.prev_record_offset = offset(inserted, left);
         left_record.hdr.next_record_offset = offset(left, inserted);
@@ -325,8 +332,9 @@ protected:
         record.hdr.length = frame_->dump_at(frame_->last_inserted(), record);
         inserted.offset = frame_->ppos();
 
-        Log::GlobalLog() << "the end of the inserted record: " << frame_->ppos()
-                         << std::endl;
+        // Log::GlobalLog() << "the end of the inserted record: " <<
+        // frame_->ppos()
+        //                  << std::endl;
         record.hdr.next_record_offset = offset(inserted, right_cursor);
         record.hdr.prev_record_offset = offset(inserted, left_cursor);
         left_record.hdr.next_record_offset = offset(left_cursor, inserted);
@@ -343,63 +351,68 @@ protected:
         return inserted;
     }
 
-    ErrorCode node_split(N &node, int n1, int n2) {
-        // page header update
-        if (!node.frame_->is_full())
-            return ErrorCode::NodeNotFull;
-        {
-            auto frame = node.frame_;
+    NodeCursor parent_cursor() {
+        // FIXME;
+    }
 
-            int i = 0;
-            while (i < n2) {
-                auto result = pop_back();
-                if (!result)
-                    return result.error();
-                auto &record = result.value();
-                node.insert_record(record.key, record.value);
-                i++;
+    ErrorCode node_split(N &node, int n1, int n2, BufferPoolManager *pool) {
+        // page header update
+        // Log::GlobalLog() << std::format("[{}; {}]\n", n1, n2);
+        if (!frame_->is_full())
+            return ErrorCode::NodeNotFull;
+
+        auto frame = node.frame_;
+
+        int i = 0;
+        while (i < n2) {
+            auto result = pop_back();
+            if (!result)
+                return result.error();
+            auto &record = result.value();
+            record.hdr.status = 0;
+
+            auto cursor = node.push_front(record.key, record.value);
+            if (!frame_->is_leaf()) {
+                update_record_parent(node, cursor.record, cursor.offset, pool);
             }
+
+            //  DEBUG
+            i++;
         }
+
+        // Log::GlobalLog() << "[IndexNode] left node has "
+        //                  << this->number_of_records() << "; right node has "
+        //                  << node.number_of_records() << std::endl;
         // record copy
         return ErrorCode::Success;
     }
 
-    void remove_record(R &record) {
-        auto record_end = frame_->ppos();
+    ErrorCode node_move(N &node, BufferPoolManager *pool) {
+        auto frame = node.frame_;
 
-        R left_record = make_prev_record(record, record_end);
-        page_off_t left_start = frame_->gpos() - left_record.len();
+        auto cursor = first_user_cursor();
+        int i = 0;
+        while (i < number_of_records()) {
+            auto &record = cursor.record;
 
-        R right_record = make_next_record(record, record_end);
-        page_off_t right_start = frame_->gpos() - right_record.len();
+            auto inserted = node.push_back(record.key, record.value);
 
-        Log::GlobalLog() << "the end of the to-be-deleted record: "
-                         << record_end << std::endl;
-        Log::GlobalLog() << "the start of the left record: " << left_start
-                         << std::endl;
-        Log::GlobalLog() << "the start of the right record: " << right_start
-                         << std::endl;
-        left_record.hdr.next_record_offset =
-            right_start - (left_start + left_record.len());
-        right_record.hdr.prev_record_offset =
-            left_start - (right_start + right_record.hdr.length);
-        // FIXME: lazy delete, need a pruning procedure.
-        record.hdr.status = uint8_t(config::RecordStatus::Deleted);
+            if (!frame_->is_leaf()) {
+                update_record_parent(node, inserted.record, inserted.offset,
+                                     pool);
+            }
+            cursor = next_cursor(cursor);
+            i++;
+        }
 
-        // FIXME: cereal serialization determination.
-        frame_->dump_at(record_end - record.len(), record);
-        frame_->dump_at(left_start, left_record);
-        frame_->dump_at(right_start, right_record);
-
-        frame_->page()->hdr.number_of_records--;
+        return ErrorCode::Success;
     }
-
     NodeCursor remove_record(NodeCursor &cursor) {
         NodeCursor left_cursor = prev_cursor(cursor);
         NodeCursor right_cursor = next_cursor(cursor);
 
-        Log::GlobalLog() << "the end offset of the to-be-deleted record: "
-                         << cursor.offset << std::endl;
+        // Log::GlobalLog() << "the end offset of the to-be-deleted record: "
+        // << cursor.offset << std::endl;
         auto &left_record = left_cursor.record;
         auto &right_record = right_cursor.record;
         left_record.hdr.next_record_offset = offset(left_cursor, right_cursor);
@@ -426,18 +439,6 @@ protected:
         }
     }
 
-    // record forward traverse in a node.
-    void traverse(const TraverseFunc &func) {
-        auto cursor = first_user_cursor();
-
-        int i = 0;
-        while (i < frame_->number_of_records()) {
-            func(cursor.record);
-            cursor = next_cursor(cursor);
-            i++;
-        }
-    }
-
     // record reverse traverse in a node.
     void traverse_r(const TraverseFunc &func) {
 
@@ -450,6 +451,25 @@ protected:
             i++;
         }
     }
+
+#ifdef DEBUG
+    void print() {
+        Log::GlobalLog() << std::format("printing page {}: ", frame_->pgno());
+        if (number_of_records() == 0)
+            return;
+        auto cursor = first_user_cursor();
+        int i = 0;
+        while (i < number_of_records()) {
+            Log::GlobalLog()
+                << cursor.record.key << ": " << cursor.record.value << ", ";
+            // Log::GlobalLog() << cursor.record.key << ", ";
+
+            cursor = next_cursor(cursor);
+            i++;
+        }
+        Log::GlobalLog() << std::endl;
+    }
+#endif // DEBUG
 
 protected:
     // // retur Infimum record.
@@ -552,6 +572,9 @@ protected:
         frame_->dump_at(cursor.offset - cursor.record.hdr.length,
                         cursor.record);
     }
+    virtual ErrorCode update_record_parent(N &node, R &record,
+                                           page_off_t offset,
+                                           BufferPoolManager *pool) = 0;
 
 protected:
     Frame *frame_;
@@ -564,20 +587,80 @@ protected:
     // IndexNode *parent_node_;
 };
 
+class LeafIndexNode : public IndexNode<LeafIndexNode, LeafClusteredRecord> {
+public:
+    LeafIndexNode(Frame *frame, Comparator &comp) : IndexNode(frame, comp) {}
+    virtual ~LeafIndexNode() = default;
+
+    ErrorCode update_record_parent(LeafIndexNode &new_parent,
+                                   LeafClusteredRecord &record,
+                                   page_off_t offset,
+                                   BufferPoolManager *pool) override {
+        return ErrorCode::Success;
+    }
+
+    void traverse(const TraverseFunc &func) {
+
+        auto cursor = first_user_cursor();
+
+        int i = 0;
+        while (i < frame_->number_of_records()) {
+            func(cursor.record);
+            cursor = next_cursor(cursor);
+            i++;
+        }
+    }
+};
+
 class InternalIndexNode
     : public IndexNode<InternalIndexNode, InternalClusteredRecord> {
 public:
     InternalIndexNode(Frame *frame, Comparator &comp)
         : IndexNode(frame, comp) {}
     virtual ~InternalIndexNode() = default;
-};
 
-class LeafIndexNode : public IndexNode<LeafIndexNode, LeafClusteredRecord> {
-public:
-    LeafIndexNode(Frame *frame, Comparator &comp) : IndexNode(frame, comp) {}
-    virtual ~LeafIndexNode() = default;
-};
+    ErrorCode update_record_parent(InternalIndexNode &new_parent,
+                                   InternalClusteredRecord &record,
+                                   page_off_t offset,
+                                   BufferPoolManager *pool) override {
+        auto result = pool->get_frame(record.value);
+        if (!result)
+            return result.error();
 
+        result.value()->set_parent(new_parent.frame_->pgno(),
+                                   offset - record.len());
+
+        return ErrorCode::Success;
+    }
+
+    void traverse(const TraverseFunc &func, BufferPoolManager *pool) {
+        // Log::GlobalLog() << "---------------------------------------------"
+        //                  << std::endl;
+        // Log::GlobalLog() << "at level " << int(frame_->level()) << std::endl;
+        // print();
+        // Log::GlobalLog() << "---------------------------------------------"
+        // << std::endl;
+
+        auto cursor = first_user_cursor();
+
+        int i = 0;
+        while (i < number_of_records()) {
+            auto child = pool->get_frame(cursor.record.value);
+            if (!child)
+                return;
+
+            if (child.value()->is_leaf()) {
+                LeafIndexNode node(child.value(), comp_);
+                node.traverse(func);
+            } else {
+                InternalIndexNode node(child.value(), comp_);
+                node.traverse(func, pool);
+            }
+            cursor = next_cursor(cursor);
+            i++;
+        }
+    }
+};
 } // namespace storage
 
 #endif // !STORAGE_INCLUDE_INDEX_NODE_H

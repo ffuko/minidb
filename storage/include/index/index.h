@@ -109,6 +109,7 @@ public:
     int number_of_records() const { return meta_.number_of_records; }
 
 private:
+    tl::expected<Frame *, ErrorCode> move_frame(Frame *child);
     tl::expected<Frame *, ErrorCode> new_nonleaf_root(Frame *child);
     auto get_root_frame() { return pool_->get_frame(meta_.root_page); }
 
@@ -117,7 +118,7 @@ private:
     template <typename N>
     ErrorCode balance_for_delete(Frame *frame);
     ErrorCode balance_for_insert(Frame *frame);
-    ErrorCode rebalance_internal(Frame *frame);
+    ErrorCode balance_for_insert_internal(Frame *frame);
     ErrorCode safe_node_split(Frame *frame, Frame *parent_frame);
     bool sibling_union_check(Frame *frame);
     void union_frame(Frame *, Frame *);

@@ -30,21 +30,6 @@ void Frame::reassign(std::shared_ptr<Page> page) {
     membuf_.init(page_->payload, page_->payload_len());
 }
 
-Key Frame::key() {
-    // FIXME: use a generic infimum record instead.
-    if (is_leaf()) {
-        LeafClusteredRecord record;
-        load_at(0, record);
-        load(record.hdr.next_record_offset - record.hdr.length, record);
-        return record.key;
-    } else {
-        InternalClusteredRecord record;
-        load_at(0, record);
-        load(record.hdr.next_record_offset - record.hdr.length, record);
-        return record.key;
-    }
-}
-
 // return nullptr if the frame is the root frame.
 tl::expected<Frame *, ErrorCode> Frame::parent_frame() const {
     if (page()->hdr.parent_page == 0)
@@ -60,11 +45,15 @@ Frame::parent_record() const {
         .and_then(
             [this](Frame *parent)
                 -> tl::expected<Cursor<InternalClusteredRecord>, ErrorCode> {
+                if (!parent) {
+                    return tl::unexpected(ErrorCode::GetRootParent);
+                }
+
                 InternalClusteredRecord record;
                 parent->load_at(this->page()->hdr.parent_record_off, record);
-                return Cursor<InternalClusteredRecord>{
-                    parent->pgno(), this->page()->hdr.parent_record_off,
-                    record};
+
+                return Cursor<InternalClusteredRecord>{parent->pgno(),
+                                                       parent->gpos(), record};
             })
         .or_else(
             [](ErrorCode ec)

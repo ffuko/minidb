@@ -32,7 +32,6 @@ public:
             pool_.push_back(Frame(this, i));
             free_list_.push_back(i);
         }
-        free_list_.push_back(-1);
     }
 
     ~BufferPoolManager() { // page_table_.clear();
@@ -64,47 +63,9 @@ public:
     ErrorCode for_each(const TraverseFunc &func);
     // Frame **pool() { return pool_.get(); }
 
-    tl::expected<frame_id_t, ErrorCode> get_free_frame_id() {
-        if (free_list_.empty()) {
-            auto result = cache_.victim();
-            if (!result)
-                return tl::unexpected(result.error());
-            return result.value()->id();
-        }
-
-        // NOTE: return a reference which will be invalid after erasion
-        // frame_id_t id = free_list_.front();
-
-        frame_id_t id = free_list_.front();
-        free_list_.pop_front();
-        return id;
-    }
-
 private:
-    tl::expected<Frame *, ErrorCode>
-    get_free_frame(std::shared_ptr<Page> page) {
-        Frame *frame;
-        auto free = get_free_frame_id();
-        if (!free)
-            return tl::unexpected(free.error());
-        frame = &pool_[free.value()];
-        frame->reassign(page);
-
-        ErrorCode ec = cache_.put(page->pgno(), frame);
-        if (ec == ErrorCode::Success) {
-            Log::GlobalLog()
-                << std::format(
-                       "[BufferPoolManager]: get a free frame {} for page {}",
-                       frame->id(), frame->pgno())
-                << std::endl;
-            return frame;
-        } else {
-            Log::GlobalLog()
-                << std::format("[BufferPoolManager]: failed get a free frame")
-                << std::endl;
-            return tl::unexpected(ec);
-        }
-    }
+    tl::expected<frame_id_t, ErrorCode> get_free_frame_id();
+    tl::expected<Frame *, ErrorCode> get_free_frame(std::shared_ptr<Page> page);
 
     using PageTable = std::unordered_map<page_id_t, frame_id_t>;
     using FrameLRUCache = LRUCacheWithPin<page_id_t, Frame *>;

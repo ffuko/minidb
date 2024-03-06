@@ -125,6 +125,7 @@ public:
             // std::cout << "Read less than a page" << std::endl;
         }
         std::shared_ptr<Page> page = std::make_shared<Page>(data);
+        page->hdr.pgno = pgno;
 
         return page;
     }
@@ -154,8 +155,8 @@ public:
 
         // flush to keep disk file in sync
         db_io_.flush();
-        Log::GlobalLog() << "[DiskManager]: succeed to write page "
-                         << page->pgno() << std::endl;
+        // Log::GlobalLog() << "[DiskManager]: succeed to write page "
+        //                  << page->pgno() << std::endl;
         return ErrorCode::Success;
     }
 
@@ -181,6 +182,9 @@ public:
         }
 
         // no more free pages, allocate a new one
+        // FIXME: page count overflow
+        if (file_header_.page_count > config::MAX_PAGE_NUM_PER_FILE)
+            return tl::unexpected(ErrorCode::DiskWriteOverflow);
         // zero fill
         std::filesystem::resize_file(
             db_file_, std::filesystem::file_size(db_file_) + config::PAGE_SIZE);
@@ -189,9 +193,10 @@ public:
         std::shared_ptr<Page> page =
             std::make_shared<Page>(file_header_.page_count);
 
-        Log::GlobalLog() << std::format("[DiskManager]: allocate new page {}",
-                                        page->pgno())
-                         << std::endl;
+        // Log::GlobalLog() << std::format("[DiskManager]: allocate new page
+        // {}",
+        //                                 page->pgno())
+        //                  << std::endl;
 
         file_header_.free_array.set(file_header_.page_count, false);
         file_header_.page_count++;
@@ -238,8 +243,8 @@ private:
 
         // flush to keep disk file in sync
         db_io_.flush();
-        Log::GlobalLog() << "[DiskManager]: update the index's file header"
-                         << std::endl;
+        // Log::GlobalLog() << "[DiskManager]: update the index's file header"
+        //                  << std::endl;
         return ErrorCode::Success;
     }
 
