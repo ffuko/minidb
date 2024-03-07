@@ -102,6 +102,8 @@ public:
         char *data;
         // check if read beyond file length
         if (offset > std::filesystem::file_size(db_file_)) {
+            // FIXME: debug
+            throw std::runtime_error("DiskReadOverflow");
             return tl::unexpected(ErrorCode::DiskReadOverflow);
         }
         data = new char[config::PAGE_SIZE]();

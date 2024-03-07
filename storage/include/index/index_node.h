@@ -88,7 +88,7 @@ public:
 
     // return the first key of the node.
     // if the node is empty, return zero value.
-    Key key() {
+    Key get_key() {
         if (number_of_records() == 0)
             return Key{};
         auto first = first_user_cursor();
@@ -219,6 +219,21 @@ public:
         auto first = first_user_cursor();
 
         auto result = insert_record_before(first, key, value);
+
+        // update the parent record.
+        // FIXME: only called in node split, no need to maintain the parent
+        // record.
+
+        auto parent_frame = frame_->parent_frame();
+        if (parent_frame && parent_frame.value()) {
+            auto parent_record = frame_->parent_record();
+            parent_record.value().record.key = get_key();
+            parent_frame.value()->dump_at(
+                parent_record.value().offset -
+                    parent_record.value().record.len(),
+                parent_record.value().record);
+        }
+
         return result;
     }
 
@@ -246,26 +261,38 @@ public:
         return record;
     }
 
-    tl::expected<R, ErrorCode> pop_front() {
+    tl::expected<NodeCursor, ErrorCode> pop_front() {
         if (number_of_records() == 0)
             return tl::unexpected(ErrorCode::PopEmptyNode);
-        auto last = first_user_cursor();
-        auto left = prev_cursor(last);
-        auto right = next_cursor(last);
-        auto &record = last.record;
+        auto first = first_user_cursor();
+        auto left = prev_cursor(first);
+        auto right = next_cursor(first);
+        auto &record = first.record;
         auto &right_record = right.record;
         auto &left_record = left.record;
 
         left_record.hdr.next_record_offset = offset(left, right);
-        right_record.hdr.next_record_offset = offset(right, left);
+        right_record.hdr.prev_record_offset = offset(right, left);
         record.hdr.status = uint8_t(config::RecordStatus::Deleted);
 
-        dump(last);
+        dump(first);
         dump(left);
         dump(right);
         frame_->page()->hdr.number_of_records--;
 
-        return record;
+        // update the parent record.
+        auto parent_frame = frame_->parent_frame();
+        if (parent_frame && parent_frame.value()) {
+            auto parent_record = frame_->parent_record();
+            parent_record.value().record.key = get_key();
+            parent_frame.value()->dump_at(
+                parent_record.value().offset -
+                    parent_record.value().record.len(),
+                parent_record.value().record);
+        }
+        // FIXME: if the node is internal, update its child's parent record
+
+        return first;
     }
     // void set_parent_node(IndexNode *parent) { this->parent_node_ = parent; }
     // IndexNode *parent_node() const { return parent_node_; }
@@ -407,6 +434,27 @@ protected:
 
         return ErrorCode::Success;
     }
+    ErrorCode node_move(N &node, size_t number, BufferPoolManager *pool) {
+        auto frame = node.frame_;
+
+        auto cursor = first_user_cursor();
+        int i = 0;
+        while (i < number_of_records() && i < number) {
+            auto &record = cursor.record;
+
+            auto inserted = node.push_back(record.key, record.value);
+
+            if (!frame_->is_leaf()) {
+                update_record_parent(node, inserted.record, inserted.offset,
+                                     pool);
+            }
+            cursor = next_cursor(cursor);
+            i++;
+        }
+
+        return ErrorCode::Success;
+    }
+
     NodeCursor remove_record(NodeCursor &cursor) {
         NodeCursor left_cursor = prev_cursor(cursor);
         NodeCursor right_cursor = next_cursor(cursor);
@@ -425,16 +473,36 @@ protected:
         dump(left_cursor);
         dump(right_cursor);
 
+        // pop front, update the parent record.
+        if (left_record.hdr.order == 0) {
+            auto parent_frame = frame_->parent_frame();
+            if (parent_frame && parent_frame.value()) {
+                auto parent_cursor = frame_->parent_record();
+                parent_cursor.value().record.key = get_key();
+                parent_frame.value()->dump_at(
+                    parent_cursor.value().offset -
+                        parent_cursor.value().record.len(),
+                    parent_cursor.value().record);
+            }
+        }
+
         frame_->page()->hdr.number_of_records--;
         return cursor;
     }
 
-    void node_union(N &node) {
-        auto cursor = first_user_cursor();
+    void node_union(N &node, BufferPoolManager *pool) {
+        auto cursor = node.first_user_cursor();
+
         int i = 0;
         while (i < node.frame_->number_of_records()) {
             auto &record = cursor.record;
-            push_back(record.key, record.value);
+            // FIXME: update the child
+            auto inserted = push_back(record.key, record.value);
+            // overload in InternalIndexNode
+            // if (!node.frame_->is_leaf()) {
+            // update_record_parent(*this, cursor.record, cursor.offset, pool);
+            // }
+            cursor = node.next_cursor(cursor);
             i++;
         }
     }
@@ -618,6 +686,47 @@ public:
     InternalIndexNode(Frame *frame, Comparator &comp)
         : IndexNode(frame, comp) {}
     virtual ~InternalIndexNode() = default;
+
+    void node_union(InternalIndexNode &node, BufferPoolManager *pool) {
+        auto cursor = node.first_user_cursor();
+
+        // update the child page link
+        auto last_child = last_user_cursor();
+        auto first_child_frame = pool->get_frame(cursor.record.value);
+        auto last_child_frame = pool->get_frame(last_child.record.value);
+        assert(first_child_frame.has_value());
+        assert(last_child_frame.has_value());
+        // FIXME: wrapped as a Frame member function.
+        first_child_frame.value()->page()->hdr.prev_page =
+            last_child_frame.value()->pgno();
+        last_child_frame.value()->page()->hdr.next_page =
+            first_child_frame.value()->pgno();
+
+        int i = 0;
+        while (i < node.frame_->number_of_records()) {
+            auto &record = cursor.record;
+
+            auto inserted = push_back(record.key, record.value);
+            update_record_child(*this, inserted.record, inserted.offset, pool);
+
+            cursor = node.next_cursor(cursor);
+            i++;
+        }
+    }
+
+    ErrorCode update_record_child(InternalIndexNode &new_parent,
+                                  InternalClusteredRecord &record,
+                                  page_off_t offset, BufferPoolManager *pool) {
+        auto child = pool->get_frame(record.value);
+        if (!child)
+            return child.error();
+
+        auto child_frame = child.value();
+        child_frame->set_parent(new_parent.frame_->pgno(),
+                                offset - record.len());
+
+        return ErrorCode::Success;
+    }
 
     ErrorCode update_record_parent(InternalIndexNode &new_parent,
                                    InternalClusteredRecord &record,

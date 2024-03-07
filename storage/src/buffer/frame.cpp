@@ -31,6 +31,7 @@ void Frame::reassign(std::shared_ptr<Page> page) {
 }
 
 // return nullptr if the frame is the root frame.
+// FIXME: return an error instead of nullptr when the frame is the root.
 tl::expected<Frame *, ErrorCode> Frame::parent_frame() const {
     if (page()->hdr.parent_page == 0)
         return nullptr;

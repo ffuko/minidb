@@ -90,6 +90,9 @@ TEST(IndexTest, ManyInsert) {
     // FIXME:
     // index->traverse(print);
 
+    rng = std::default_random_engine{};
+    std::shuffle(std::begin(input), std::end(input), rng);
+
     for (auto &row : input) {
         auto result = index->search_record(row.first);
         ASSERT_EQ(true, result.has_value())
@@ -97,4 +100,55 @@ TEST(IndexTest, ManyInsert) {
             << ErrorHandler::print_error(result.error());
         ASSERT_EQ(row.second, result.value().value);
     }
+    std::filesystem::remove("test.db");
+}
+
+TEST(IndexTest, ManyDelete) {
+    KeyMeta key_meta = {"id", storage::key_t(KeyType::Int)};
+    FieldMeta field_meta = {"score", storage::key_t(KeyType::Int)};
+    std::vector<FieldMeta> fields_meta = {field_meta};
+
+    auto index =
+        Index::make_index(0, "test.db", key_meta, fields_meta, std::cerr);
+
+    std::vector<std::pair<Key, Column>> input;
+    for (int i = 0; i < 300; i++) {
+        input.push_back({i, {90}});
+    }
+
+    // FIXME: insert doesn't maintain same-level node list.
+    auto rng = std::default_random_engine{};
+    std::shuffle(std::begin(input), std::end(input), rng);
+
+    for (auto &row : input) {
+        auto ec = index->insert_record(row.first, row.second);
+        ASSERT_EQ(ErrorCode::Success, ec)
+            << "error is " << ErrorHandler().print_error(ec);
+    }
+
+    std::function<void(storage::LeafClusteredRecord &)> print =
+        [](storage::LeafClusteredRecord &record) {
+            std::cerr << record.key << ": " << record.value << std::endl;
+        };
+
+    // FIXME:
+    // index->traverse(print);
+
+    rng = std::default_random_engine{};
+    std::shuffle(std::begin(input), std::end(input), rng);
+
+    for (auto &row : input) {
+        auto result = index->search_record(row.first);
+        ASSERT_EQ(true, result.has_value())
+            << "cannot find record because of "
+            << ErrorHandler::print_error(result.error());
+        ASSERT_EQ(row.second, result.value().value);
+
+        auto ec = index->remove_record(row.first);
+        ASSERT_EQ(ErrorCode::Success, ec)
+            << "remove has error " << ErrorHandler().print_error(ec);
+        result = index->search_record(row.first);
+        ASSERT_EQ(false, result.has_value());
+    }
+    std::filesystem::remove("test.db");
 }

@@ -41,6 +41,7 @@ enum class ErrorCode : size_t {
     // node error
     NodeNotFull,
     PopEmptyNode,
+    RootHeightDecrease,
 
     UnknownException,
 };
@@ -76,7 +77,8 @@ private:
 
             // pool error
             "PoolNoFreeFrame", "DeletedPageNotExist", "GetRootParent",
-            "NodeNotFull", "PopEmptyNode", "UnknownException"};
+            "NodeNotFull", "PopEmptyNode", "RootHeightDecrease",
+            "UnknownException"};
 };
 
 // class MyException : public std::runtime_error {

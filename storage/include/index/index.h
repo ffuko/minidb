@@ -110,6 +110,8 @@ public:
 
 private:
     tl::expected<Frame *, ErrorCode> move_frame(Frame *child);
+    tl::expected<Frame *, ErrorCode> move_frame(Frame *frame, size_t number);
+
     tl::expected<Frame *, ErrorCode> new_nonleaf_root(Frame *child);
     auto get_root_frame() { return pool_->get_frame(meta_.root_page); }
 

@@ -38,8 +38,14 @@ Index::search_record(const Key &key) {
     LeafIndexNode node(frame, comp_);
     auto result = node.search_record(key);
     if (!result) {
-        // Log::GlobalLog() << "don't find key " << key << std::endl;
-        // node.print();
+        LeafIndexNode node(frame, comp_);
+        Log::GlobalLog() << "failed to search " << key << std::endl;
+        node.print();
+        auto parent = frame->parent_frame();
+        if (parent && parent.value()) {
+            InternalIndexNode parent_node(parent.value(), comp_);
+            parent_node.print();
+        }
         return tl::unexpected(result.error());
     }
     // Log::GlobalLog() << "found record on key " << key << std::endl;
@@ -89,6 +95,13 @@ ErrorCode Index::insert_record(const Key &key, const Column &value) {
         return leaf.error();
 
     Frame *frame = leaf.value();
+    balance_for_insert(frame);
+
+    leaf = search_leaf(key);
+    if (!leaf)
+        return leaf.error();
+
+    frame = leaf.value();
 
     tl::expected<LeafIndexNode::NodeCursor, ErrorCode> result;
     try {
@@ -130,8 +143,6 @@ ErrorCode Index::insert_record(const Key &key, const Column &value) {
     // Log::GlobalLog() << "inserted record " << key << ": " << value
     //                  << " before offset " << result.value().offset
     //                  << " in page " << frame->pgno() << std::endl;
-
-    balance_for_insert(frame);
 
     return ErrorCode::Success;
 }
@@ -179,10 +190,69 @@ tl::expected<Frame *, ErrorCode> Index::move_frame(Frame *frame) {
     // update page list
     auto prev_page = pool_->get_frame(frame->page()->hdr.prev_page);
     auto next_page = pool_->get_frame(frame->page()->hdr.next_page);
-    if ((!prev_page) || !(!next_page)) {
+
+    if (prev_page && prev_page.value()) {
         prev_page.value()->page()->hdr.next_page = new_frame->pgno();
-        next_page.value()->page()->hdr.prev_page = new_frame->pgno();
         prev_page.value()->mark_dirty();
+    }
+    if (next_page && next_page.value()) {
+        next_page.value()->page()->hdr.prev_page = new_frame->pgno();
+        next_page.value()->mark_dirty();
+    }
+
+    return new_frame;
+}
+
+// move the page's record into a new page to make the page compact.
+tl::expected<Frame *, ErrorCode> Index::move_frame(Frame *frame,
+                                                   size_t number) {
+    auto result =
+        allocate_frame(frame->index(), frame->level(), frame->is_leaf());
+    if (!result)
+        return tl::unexpected(result.error());
+
+    Frame *new_frame = result.value();
+    // copy header
+    new_frame->page()->hdr.prev_page = frame->page()->hdr.prev_page;
+    new_frame->page()->hdr.next_page = frame->page()->hdr.next_page;
+    new_frame->page()->hdr.parent_page = frame->page()->hdr.parent_page;
+    new_frame->page()->hdr.parent_record_off =
+        frame->page()->hdr.parent_record_off;
+
+    // copy payload
+    if (frame->is_leaf()) {
+        LeafIndexNode node(frame, comp_);
+        LeafIndexNode new_node(new_frame, comp_);
+        node.node_move(new_node, number, pool_.get());
+    } else {
+        InternalIndexNode node(frame, comp_);
+        InternalIndexNode new_node(new_frame, comp_);
+        node.node_move(new_node, number, pool_.get());
+    }
+    // update parent record
+    auto cursor = frame->parent_record();
+    if (!cursor)
+        return tl::unexpected(cursor.error());
+
+    cursor.value().record.value = new_frame->pgno();
+    auto parent_frame = pool_->get_frame(cursor.value().page);
+    if (!parent_frame)
+        return tl::unexpected(parent_frame.error());
+
+    parent_frame.value()->dump_at(cursor.value().offset -
+                                      cursor.value().record.len(),
+                                  cursor.value().record);
+    // InternalIndexNode parent_node(parent_frame.value(), comp_);
+
+    // update page list
+    auto prev_page = pool_->get_frame(frame->page()->hdr.prev_page);
+    auto next_page = pool_->get_frame(frame->page()->hdr.next_page);
+    if (prev_page && prev_page.value()) {
+        prev_page.value()->page()->hdr.next_page = new_frame->pgno();
+        prev_page.value()->mark_dirty();
+    }
+    if (next_page && next_page.value()) {
+        next_page.value()->page()->hdr.prev_page = new_frame->pgno();
         next_page.value()->mark_dirty();
     }
 
@@ -196,7 +266,11 @@ ErrorCode Index::remove_record(const Key &key) {
 
     auto frame = leaf.value();
 
-    balance_for_delete<LeafIndexNode>(frame);
+    auto error = balance_for_delete<LeafIndexNode>(frame);
+    if (error != ErrorCode::Success) {
+        Log::GlobalLog() << "failed to balance for delete, reason: " << error
+                         << std::endl;
+    }
 
     // FIXME: better solution to handle the result of search_leaf went invalid?
     leaf = search_leaf(key);
@@ -207,9 +281,18 @@ ErrorCode Index::remove_record(const Key &key) {
     LeafIndexNode node(frame, comp_);
 
     auto ec = node.remove_record(key);
-    Log::GlobalLog() << "removed record of " << key << std::endl;
-    if (!ec)
+    if (!ec) {
+        LeafIndexNode node(frame, comp_);
+        Log::GlobalLog() << "failed to search " << key << std::endl;
+        node.print();
+        auto parent = frame->parent_frame();
+        if (parent && parent.value()) {
+            InternalIndexNode parent_node(parent.value(), comp_);
+            parent_node.print();
+        }
         return ec.error();
+    }
+    Log::GlobalLog() << "removed record of " << key << std::endl;
     return ErrorCode::Success;
 }
 
@@ -251,40 +334,55 @@ ErrorCode Index::balance_for_delete(Frame *frame) {
         // case 2: reconstruct the frame by borrowing one record from one of its
         // neighbors.
         if (!u) {
-            auto result = frame->prev_frame();
-            if (!result)
-                return result.error();
-            auto left_frame = result.value();
-            result = frame->next_frame();
-            if (!result)
-                return result.error();
-            auto right_frame = result.value();
+#ifdef DEBUG
+            Log::GlobalLog() << "choose to borrow" << std::endl;
+#endif // DEBUG
+            auto prev_result = frame->prev_frame();
+            Frame *left_frame, *right_frame;
+            auto next_result = frame->next_frame();
 
             N node(frame, comp_);
-            if (right_frame->number_of_records() >
-                // borrow from right sibling frame.
-                config::min_number_of_records()) {
 
-                N right_node(right_frame, comp_);
-                auto borrowed = right_node.pop_front();
+            // FIXME: update the child
+            if (prev_result) {
+                left_frame = prev_result.value();
+                if (left_frame->number_of_records() >
+                    config::min_number_of_records()) {
+                    // borrow fromt the left sibling frame.
+                    N left_node(left_frame, comp_);
+                    node.print();
+                    auto borrowed = left_node.pop_back();
+                    if (!borrowed)
+                        return borrowed.error();
+                    auto &to_move = borrowed.value();
+                    node.push_front(to_move.key, to_move.value);
+                    node.print();
+                    left_node.print();
+                }
+            } else if (next_result) {
+                right_frame = next_result.value();
+                if (right_frame->number_of_records() >
+                    // borrow from right sibling frame.
+                    config::min_number_of_records()) {
 
-                if (!borrowed)
-                    return borrowed.error();
-                node.push_back(borrowed.value().key, borrowed.value().value);
+                    N right_node(right_frame, comp_);
+                    node.print();
+                    auto borrowed = right_node.pop_front();
 
-            } else if (left_frame->number_of_records() >
-                       config::min_number_of_records()) {
-                // borrow fromt the left sibling frame.
-                N left_node(left_frame, comp_);
-                auto borrowed = left_node.pop_back();
-                if (!borrowed)
-                    return borrowed.error();
-                auto &to_move = borrowed.value();
-                node.push_front(to_move.key, to_move.value);
+                    if (!borrowed)
+                        return borrowed.error();
+                    node.push_back(borrowed.value().record.key,
+                                   borrowed.value().record.value);
+                    node.print();
+                    right_node.print();
+                }
             } else {
                 return ErrorCode::Failure;
             }
         }
+    } else if (frame->pgno() == meta_.root_page &&
+               frame->number_of_records() == 2) {
+        return ErrorCode::RootHeightDecrease;
     }
     return ErrorCode::Success;
 }
@@ -295,25 +393,20 @@ bool Index::sibling_union_check(Frame *frame) {
         return false;
     }
 
-    auto result = frame->prev_frame();
-    if (!result)
-        return false;
-    auto left_frame = result.value();
-    result = frame->next_frame();
-    if (!result)
-        return false;
-    auto right_frame = result.value();
+    auto prev_result = frame->prev_frame();
+    auto next_result = frame->next_frame();
 
     LeafIndexNode node(frame, comp_);
 
-    if (left_frame != nullptr &&
-        left_frame->number_of_records() + frame->number_of_records() <=
+    if (prev_result && prev_result.value() != nullptr &&
+        prev_result.value()->number_of_records() + frame->number_of_records() <=
             config::max_number_of_records()) {
-        union_frame(left_frame, frame);
-    } else if (right_frame != nullptr &&
-               right_frame->number_of_records() + frame->number_of_records() <=
+        union_frame(prev_result.value(), frame);
+    } else if (next_result && next_result.value() != nullptr &&
+               next_result.value()->number_of_records() +
+                       frame->number_of_records() <=
                    config::max_number_of_records()) {
-        union_frame(frame, right_frame);
+        union_frame(frame, next_result.value());
     } else {
         return false;
     }
@@ -322,7 +415,9 @@ bool Index::sibling_union_check(Frame *frame) {
 }
 
 void Index::union_frame(Frame *left_frame, Frame *right_frame) {
-
+#ifdef DEBUG
+    Log::GlobalLog() << "choose to union" << std::endl;
+#endif
     auto left_parent_cursor = left_frame->parent_record();
     auto right_parent_cursor = right_frame->parent_record();
     Frame *left_parent, *right_parent;
@@ -331,38 +426,87 @@ void Index::union_frame(Frame *left_frame, Frame *right_frame) {
         return;
     } else if (!right_parent_cursor)
         return;
-    auto result = pool_->get_frame(left_parent_cursor.value().page);
+    auto result = pool_->get_frame(right_parent_cursor.value().page);
     if (!result)
         return;
     right_parent = result.value();
 
-    if (left_frame->is_leaf()) {
-        LeafIndexNode left_node(left_frame, comp_);
-        LeafIndexNode right_node(right_frame, comp_);
+    size_t left_size_before;
+try_union:
+    try {
+        if (left_frame->is_leaf()) {
+            LeafIndexNode left_node(left_frame, comp_);
+            LeafIndexNode right_node(right_frame, comp_);
+            left_size_before = left_node.number_of_records();
 
-        left_node.node_union(right_node);
-    } else {
-        InternalIndexNode left_node(left_frame, comp_);
-        InternalIndexNode right_node(right_frame, comp_);
+            left_node.print();
+            right_node.print();
+            left_node.node_union(right_node, pool_.get());
+            left_node.print();
+        } else {
+            InternalIndexNode left_node(left_frame, comp_);
+            InternalIndexNode right_node(right_frame, comp_);
+            left_size_before = left_node.number_of_records();
 
-        left_node.node_union(right_node);
+            left_node.print();
+            right_node.print();
+            left_node.node_union(right_node, pool_.get());
+            left_node.print();
+        }
+    } catch (cereal::Exception &exception) {
+        // page write overflow
+        Log::GlobalLog() << "[Index] page overflow: " << exception.what()
+                         << std::endl;
+        auto new_frame = move_frame(left_frame, left_size_before);
+        if (!new_frame)
+            throw;
+
+        LeafIndexNode new_node(new_frame.value(), comp_);
+        // LeafIndexNode node(frame, comp_);
+
+        // Log::GlobalLog() << std::format("moved page from {} to {}\n",
+        //                                 frame->pgno(),
+        // new_frame.value()->pgno());
+        pool_->remove_frame(left_frame);
+        left_frame = new_frame.value();
+
+        assert(new_node.number_of_records() <= config::max_number_of_records());
+        goto try_union;
     }
 
     left_frame->page()->hdr.next_page = right_frame->page()->hdr.next_page;
     auto after_right = pool_->get_frame(right_frame->page()->hdr.next_page);
-    if (after_right) {
+    if (after_right && after_right.value()) {
         auto after_right_frame = after_right.value();
         after_right_frame->page()->hdr.prev_page = left_frame->pgno();
         after_right_frame->mark_dirty();
     }
+    // pool_->remove_frame(right_frame);
 
-    pool_->remove_frame(right_frame);
-    balance_for_delete<InternalIndexNode>(right_parent);
+    auto ec = balance_for_delete<InternalIndexNode>(right_parent);
+    // btree reduce height
+    if (ec == ErrorCode::RootHeightDecrease) {
+        pool_->remove_frame(right_parent);
+        meta_.root_page = left_frame->pgno();
+        return;
+    } else if (ec != ErrorCode::Success)
+        return;
+
+    right_parent_cursor = right_frame->parent_record();
+    if (!right_parent_cursor)
+        return;
+    result = pool_->get_frame(right_parent_cursor.value().page);
+    if (!result)
+        return;
+    right_parent = result.value();
 
     InternalIndexNode right_parent_node(right_parent, comp_);
+    right_parent_node.print();
     IndexNode<InternalIndexNode, InternalClusteredRecord>::NodeCursor cursor{
         right_parent_cursor.value().offset, right_parent_cursor.value().record};
     right_parent_node.remove_record(cursor);
+    pool_->remove_frame(right_frame);
+    right_parent_node.print();
 }
 
 ErrorCode Index::balance_for_insert(Frame *frame) {
@@ -387,7 +531,7 @@ ErrorCode Index::balance_for_insert(Frame *frame) {
 
         InternalIndexNode newRootNode(parent_frame, comp_);
         LeafIndexNode node(frame, comp_);
-        auto cursor = newRootNode.insert_record(node.key(), frame->pgno());
+        auto cursor = newRootNode.insert_record(node.get_key(), frame->pgno());
         if (!cursor)
             return cursor.error();
 
@@ -434,7 +578,7 @@ ErrorCode Index::balance_for_insert_internal(Frame *frame) {
 
         InternalIndexNode newRootNode(parent_frame, comp_);
         InternalIndexNode node(frame, comp_);
-        auto cursor = newRootNode.insert_record(node.key(), frame->pgno());
+        auto cursor = newRootNode.insert_record(node.get_key(), frame->pgno());
         if (!cursor)
             return cursor.error();
 
@@ -463,16 +607,24 @@ ErrorCode Index::balance_for_insert_internal(Frame *frame) {
 ErrorCode Index::safe_node_split(Frame *frame, Frame *parent_frame) {
     int n1 = std::ceil(config::max_number_of_records() / 2);
     int n2 = std::floor(config::max_number_of_records() / 2);
+    //  new frame allocation
     auto result =
         allocate_frame(frame->index(), frame->level(), frame->is_leaf());
     if (!result)
         return result.error();
     Frame *new_frame = result.value();
+
+    // update same-level node list
     new_frame->page()->hdr.next_page = frame->page()->hdr.next_page;
     new_frame->page()->hdr.prev_page = frame->pgno();
+    auto after_new_frame = pool_->get_frame(frame->page()->hdr.next_page);
+    if (after_new_frame && after_new_frame.value()) {
+        after_new_frame.value()->page()->hdr.prev_page = new_frame->pgno();
+        after_new_frame.value()->mark_dirty();
+    }
     frame->page()->hdr.next_page = new_frame->pgno();
 
-    // TODO: memcpy from frame[record:n1, n1 + n2) to new_frame
+    // memcpy from frame[record:n1, n1 + n2) to new_frame
     Key new_key, old_key;
     if (frame->is_leaf()) {
         LeafIndexNode left(frame, comp_);
@@ -481,10 +633,8 @@ ErrorCode Index::safe_node_split(Frame *frame, Frame *parent_frame) {
         auto ec = left.node_split(right, n1, n2, pool_.get());
         if (ec != ErrorCode::Success)
             return ec;
-        old_key = left.key();
-        new_key = right.key();
-        // left.print();
-        // right.print();
+        old_key = left.get_key();
+        new_key = right.get_key();
 
     } else {
         InternalIndexNode left(frame, comp_);
@@ -493,25 +643,11 @@ ErrorCode Index::safe_node_split(Frame *frame, Frame *parent_frame) {
         auto ec = left.node_split(right, n1, n2, pool_.get());
         if (ec != ErrorCode::Success)
             return ec;
-        old_key = left.key();
-        new_key = right.key();
-
-        // debug
-        // auto framel = pool_->get_frame(left.last_user_cursor().record.value)
-        //                   .value()
-        //                   ->parent_frame()
-        //                   .value()
-        //                   ->pgno();
-        // auto framer = pool_->get_frame(right.last_user_cursor().record.value)
-        //                   .value()
-        //                   ->parent_frame()
-        //                   .value()
-        //                   ->pgno();
-        // assert(framel != framer);
-        // left.print();
-        // right.print();
+        old_key = left.get_key();
+        new_key = right.get_key();
     }
 
+    // update the parent cursor.
     // NOTE: parent cursor's offset is the end of the parent record, while
     // page.hdr.parent_record_off is the start of the parent record.
     auto parent_cursor = frame->parent_record();
@@ -523,22 +659,18 @@ ErrorCode Index::safe_node_split(Frame *frame, Frame *parent_frame) {
     IndexNode<InternalIndexNode, InternalClusteredRecord>::NodeCursor cursor{
         parent_cursor.value().offset, parent_cursor.value().record};
 
-    // FIXME: better solution to maintain the first user record's split?
+    // maintain the first user record's split.
+    // FIXME: better solution?
     parent_frame->dump_at(parent_cursor.value().offset -
                               parent_cursor.value().record.len(),
                           parent_cursor.value().record);
+
+    // insert the new frame into the parent.
     auto inserted =
         parent_node.insert_record_after(cursor, new_key, new_frame->pgno());
     new_frame->set_parent(parent_frame->pgno(),
                           inserted.offset - inserted.record.len());
 
-    // parent_node.print();
-    // Log::GlobalLog()
-    //     << std::format("splited page {} by page {}, shared by parent page
-    //     {}",
-    //                    frame->pgno(), new_frame->pgno(),
-    //                    parent_frame->pgno())
-    //     << " at offset " << parent_cursor.value().offset << std::endl;
     return ErrorCode::Success;
 }
 
