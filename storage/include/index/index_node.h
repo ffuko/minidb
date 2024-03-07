@@ -95,6 +95,8 @@ public:
         return first.record.key;
     }
 
+    virtual page_off_t get_child(NodeCursor &cursor) = 0;
+
     // search for the left sibling or the desired key, whose is <= desired
     // record, or the first user record.
     // FIXME: use binary search?
@@ -220,18 +222,30 @@ public:
 
         auto result = insert_record_before(first, key, value);
 
-        // update the parent record.
-        // FIXME: only called in node split, no need to maintain the parent
-        // record.
+        // recursively update the parent record.
+        Frame *frame = frame_;
+        bool is_first = true;
+        while (is_first) {
+            auto parent_frame = frame->parent_frame();
+            if (parent_frame && parent_frame.value()) {
+                auto parent_record = frame->parent_record();
+                parent_record.value().record.key = key;
+                auto pos = parent_frame.value()->dump_at(
+                    parent_record.value().offset -
+                        parent_record.value().record.len(),
+                    parent_record.value().record);
 
-        auto parent_frame = frame_->parent_frame();
-        if (parent_frame && parent_frame.value()) {
-            auto parent_record = frame_->parent_record();
-            parent_record.value().record.key = get_key();
-            parent_frame.value()->dump_at(
-                parent_record.value().offset -
-                    parent_record.value().record.len(),
-                parent_record.value().record);
+                frame = parent_frame.value();
+                // if the parent record isn't the parent frame's first record,
+                // break the loop.
+                if (parent_record.value().record.hdr.prev_record_offset +
+                        parent_record.value().offset !=
+                    0) {
+                    is_first = false;
+                }
+            } else {
+                break;
+            }
         }
 
         return result;
@@ -250,7 +264,6 @@ public:
 
         left_record.hdr.next_record_offset = offset(left, right);
         right_record.hdr.prev_record_offset = offset(right, left);
-        // FIXME: lazy delete;
         record.hdr.status = uint8_t(config::RecordStatus::Deleted);
 
         dump(last);
@@ -280,18 +293,31 @@ public:
         dump(right);
         frame_->page()->hdr.number_of_records--;
 
-        // update the parent record.
-        auto parent_frame = frame_->parent_frame();
-        if (parent_frame && parent_frame.value()) {
-            auto parent_record = frame_->parent_record();
-            parent_record.value().record.key = get_key();
-            parent_frame.value()->dump_at(
-                parent_record.value().offset -
-                    parent_record.value().record.len(),
-                parent_record.value().record);
-        }
-        // FIXME: if the node is internal, update its child's parent record
+        // recursively update the parent record.
+        Frame *frame = frame_;
+        bool is_first = true;
+        while (is_first) {
+            auto parent_frame = frame->parent_frame();
+            if (parent_frame && parent_frame.value()) {
+                auto parent_record = frame->parent_record();
+                parent_record.value().record.key = right.record.key;
+                auto pos = parent_frame.value()->dump_at(
+                    parent_record.value().offset -
+                        parent_record.value().record.len(),
+                    parent_record.value().record);
 
+                frame = parent_frame.value();
+                // if the parent record isn't the parent frame's first record,
+                // break the loop.
+                if (parent_record.value().record.hdr.prev_record_offset +
+                        parent_record.value().offset !=
+                    0) {
+                    is_first = false;
+                }
+            } else {
+                break;
+            }
+        }
         return first;
     }
     // void set_parent_node(IndexNode *parent) { this->parent_node_ = parent; }
@@ -465,7 +491,6 @@ protected:
         auto &right_record = right_cursor.record;
         left_record.hdr.next_record_offset = offset(left_cursor, right_cursor);
         right_record.hdr.prev_record_offset = offset(right_cursor, left_cursor);
-        // FIXME: lazy delete, need a pruning procedure.
         cursor.record.hdr.status = uint8_t(config::RecordStatus::Deleted);
 
         // FIXME: cereal serialization determination.
@@ -521,7 +546,7 @@ protected:
     }
 
 #ifdef DEBUG
-    void print() {
+    void print() noexcept {
         Log::GlobalLog() << std::format("printing page {}: ", frame_->pgno());
         if (number_of_records() == 0)
             return;
@@ -660,6 +685,8 @@ public:
     LeafIndexNode(Frame *frame, Comparator &comp) : IndexNode(frame, comp) {}
     virtual ~LeafIndexNode() = default;
 
+    virtual page_off_t get_child(NodeCursor &cursor) override { return 0; }
+
     ErrorCode update_record_parent(LeafIndexNode &new_parent,
                                    LeafClusteredRecord &record,
                                    page_off_t offset,
@@ -686,6 +713,10 @@ public:
     InternalIndexNode(Frame *frame, Comparator &comp)
         : IndexNode(frame, comp) {}
     virtual ~InternalIndexNode() = default;
+
+    virtual page_off_t get_child(NodeCursor &cursor) override {
+        return cursor.record.value;
+    }
 
     void node_union(InternalIndexNode &node, BufferPoolManager *pool) {
         auto cursor = node.first_user_cursor();

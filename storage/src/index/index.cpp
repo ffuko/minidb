@@ -6,6 +6,7 @@
 #include "index/record.h"
 #include "log.h"
 #include "tl/expected.hpp"
+#include "types.h"
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -39,13 +40,16 @@ Index::search_record(const Key &key) {
     auto result = node.search_record(key);
     if (!result) {
         LeafIndexNode node(frame, comp_);
-        Log::GlobalLog() << "failed to search " << key << std::endl;
-        node.print();
-        auto parent = frame->parent_frame();
-        if (parent && parent.value()) {
-            InternalIndexNode parent_node(parent.value(), comp_);
-            parent_node.print();
-        }
+        // Log::GlobalLog() << "failed to search " << key << std::endl;
+        // node.print();
+        // Log::GlobalLog() << "prev: " << node.frame_->page()->hdr.prev_page
+        //                  << "; next " << node.frame_->page()->hdr.next_page
+        //                  << std::endl;
+        // auto parent = frame->parent_frame();
+        // if (parent && parent.value()) {
+        //     InternalIndexNode parent_node(parent.value(), comp_);
+        //     parent_node.print();
+        // }
         return tl::unexpected(result.error());
     }
     // Log::GlobalLog() << "found record on key " << key << std::endl;
@@ -70,11 +74,10 @@ tl::expected<Frame *, ErrorCode> Index::search_leaf(const Key &key) {
 
         auto child = pool_->get_frame(cursor.record.value);
         if (!child) {
-            // Log::GlobalLog() << std::format("error when reading page {}\n",
-            // cursor.record.value);
+            Log::GlobalLog() << std::format("error when reading page {}\n",
+                                            cursor.record.value);
             return tl::unexpected(child.error());
         }
-        assert(frame->pgno() != child.value()->pgno());
         frame = child.value();
         // Log::GlobalLog() << std::format("{}", frame->pgno()) << " ";
     }
@@ -343,7 +346,6 @@ ErrorCode Index::balance_for_delete(Frame *frame) {
 
             N node(frame, comp_);
 
-            // FIXME: update the child
             if (prev_result) {
                 left_frame = prev_result.value();
                 if (left_frame->number_of_records() >
@@ -355,8 +357,24 @@ ErrorCode Index::balance_for_delete(Frame *frame) {
                     if (!borrowed)
                         return borrowed.error();
                     auto &to_move = borrowed.value();
-                    node.push_front(to_move.key, to_move.value);
+                    auto inserted = node.push_front(to_move.key, to_move.value);
+                    // FIXME: if the node is internal, update its child's parent
+                    // record
+                    if (!frame->is_leaf()) {
+                        // FIXME: make type safe
+                        auto &tmp = reinterpret_cast<InternalIndexNode &>(node);
+                        tmp.update_record_parent(
+                            tmp,
+                            reinterpret_cast<InternalClusteredRecord &>(
+                                inserted.record),
+                            inserted.offset, pool_.get());
+                    }
                     node.print();
+
+                    InternalIndexNode parent(
+                        node.frame_->parent_frame().value(), comp_);
+                    parent.print();
+
                     left_node.print();
                 }
             } else if (next_result) {
@@ -371,8 +389,21 @@ ErrorCode Index::balance_for_delete(Frame *frame) {
 
                     if (!borrowed)
                         return borrowed.error();
-                    node.push_back(borrowed.value().record.key,
-                                   borrowed.value().record.value);
+                    auto inserted =
+                        node.push_back(borrowed.value().record.key,
+                                       borrowed.value().record.value);
+                    // FIXME: if the node is internal, update its child's parent
+                    // record
+                    if (!frame->is_leaf()) {
+                        // FIXME: make type safe
+                        auto &tmp = reinterpret_cast<InternalIndexNode &>(node);
+                        tmp.update_record_parent(
+                            tmp,
+                            reinterpret_cast<InternalClusteredRecord &>(
+                                inserted.record),
+                            inserted.offset, pool_.get());
+                    }
+
                     node.print();
                     right_node.print();
                 }

@@ -112,7 +112,7 @@ TEST(IndexTest, ManyDelete) {
         Index::make_index(0, "test.db", key_meta, fields_meta, std::cerr);
 
     std::vector<std::pair<Key, Column>> input;
-    for (int i = 0; i < 300; i++) {
+    for (int i = 0; i < 2000; i++) {
         input.push_back({i, {90}});
     }
 
